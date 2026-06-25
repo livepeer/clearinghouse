@@ -38,7 +38,9 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "8081:8081"
+      # Loopback only — the signer mints payments with no auth when the webhook is unset.
+      # Use "0.0.0.0:8081:8081" to expose remotely ONLY with REMOTE_SIGNER_WEBHOOK_URL set.
+      - "127.0.0.1:8081:8081"
     volumes:
       - ./remote-signer/.env:/service/.env:ro
       - ./remote-signer/data:/data
