@@ -52,6 +52,16 @@ docker compose logs -f remote-signer
 
 Expected result: `remote-signer` starts cleanly, connects to Kafka, and serves the signing HTTP port.
 
+Smoketests:
+
+```bash
+docker compose ps
+# kafka "healthy" (signer only starts once Kafka is healthy), remote-signer "Up"
+
+curl -fsS -X POST http://localhost:8081/sign-orchestrator-info
+# {"address":"0x…","signature":"0x…"} — keystore unlocked, signer can sign
+```
+
 Verify CLI port is not published:
 
 ```bash
@@ -73,6 +83,23 @@ docker compose up -d --build
 docker compose logs -f
 docker compose down
 ```
+
+Smoketest — produce a signed-ticket event; the collector forwards it to OpenMeter/Konnect:
+
+```bash
+docker compose exec -T kafka rpk topic create livepeer-gateway-events
+# gateway topic (broker auto-create is off)
+
+echo '{"type":"create_signed_ticket","data":{"auth_id":"demo-client:demo-user","computed_fee":"1000000000000000","request_id":"clearinghouse-smoketest","pipeline":"live-video-to-video","pixels":"1000"}}' \
+  | docker compose exec -T kafka rpk topic produce livepeer-gateway-events
+# collector consumes it, converts the fee, POSTs to OpenMeter/Konnect
+
+docker compose logs --tail=20 openmeter-collector
+# no ERROR = forwarded to OpenMeter
+```
+
+Re-runs are dedup-safe (OpenMeter deduplicates by event id). A real signer-emitted event needs a
+full gateway↔orchestrator lv2v job with a funded signer — out of scope here.
 
 ## Environment variables
 
