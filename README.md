@@ -98,8 +98,7 @@ docker compose logs --tail=20 openmeter-collector
 # no ERROR = forwarded to OpenMeter
 ```
 
-Re-runs are dedup-safe (OpenMeter deduplicates by event id). A real signer-emitted event needs a
-full gateway↔orchestrator lv2v job with a funded signer — out of scope here.
+Re-runs are dedup-safe (OpenMeter deduplicates by event id). A real signer-emitted event needs a full gateway or [local SDK](https://github.com/livepeer/livepeer-python-gateway) to call a real job with a funded signer — out of scope here.
 
 ## Environment variables
 
