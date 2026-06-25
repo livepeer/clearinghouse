@@ -70,7 +70,7 @@ Verify CLI port is not published:
 docker compose port remote-signer 4935
 # expected: no output / error (port is not mapped)
 docker compose port remote-signer 8081
-# expected: 0.0.0.0:8081
+# expected: 127.0.0.1:8081
 ```
 
 ### 2. Full stack — add metering
