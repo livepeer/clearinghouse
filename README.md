@@ -28,7 +28,9 @@ Signer HTTP request
 
 **Identity & auth.** The signer container runs `go-livepeer` directly. In the normal path, every signing request is authorized by go-livepeer's `-remoteSignerWebhookUrl` hook, which calls your `/authorize` endpoint with `Authorization: Bearer <WEBHOOK_SECRET>` — no reverse proxy or gateway in front of the signer. For local alive checks only, leave `REMOTE_SIGNER_WEBHOOK_URL` empty to omit the webhook hook.
 
-**CLI port not exposed.** go-livepeer's `-cliAddr` (admin/RPC) is bound to `127.0.0.1:4935` inside the container and is never published or mapped to the host. Only the signing HTTP port (`8081`) is exposed.
+**CLI port not exposed.** go-livepeer's `-cliAddr` (admin/RPC) is bound to `127.0.0.1:4935` inside the container and is never published or mapped to the host.
+
+**Signing port is loopback-only by default.** `8081` is published as `127.0.0.1:8081:8081` — host-only, not the network. `/generate-live-payment` mints PM tickets from the operator's on-chain deposit, and with `REMOTE_SIGNER_WEBHOOK_URL` unset it has **no auth** — anyone who reaches it can drain the deposit. Expose it (`0.0.0.0:8081:8081` or a reverse proxy) **only with the webhook set**.
 
 **Per-service configuration.** Each service reads a local `.env` file mounted at `/service/.env` and sourced by its entrypoint. Copy the `.env.example` in each service directory before starting the stack.
 
