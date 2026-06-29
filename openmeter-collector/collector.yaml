@@ -6,6 +6,7 @@
 # - Uses first-colon split semantics to preserve compatibility with builder-sdk.
 # - Konnect ingest: POST OPENMETER_INGEST_URL (e.g. https://<region>.api.konghq.com/v3/openmeter/events).
 #   For self-hosted OpenMeter use https://<host>/api/v1/events.
+# - Customer upsert: local Go provision sidecar on :8091/ensure (Kong sdk-konnect-go).
 
 input:
   kafka:
@@ -49,6 +50,7 @@ pipeline:
             "client_id": $client_id,
             "external_user_id": $external_user_id,
             "network_fee_usd_micros": $fee_usd_micros,
+            "billable_usd_micros": $fee_usd_micros,
             "pipeline": if $data.pipeline != "" && $data.pipeline != null { $data.pipeline } else { "unknown" },
             "model_id": if $data.model_id != "" && $data.model_id != null { $data.model_id } else { "unknown" },
             "pixels": $data.pixels.string().or("0"),
@@ -64,14 +66,58 @@ pipeline:
             message: "signed_ticket mapping failed: ${! error() }"
         - mapping: root = deleted()
 
+    # Proactive idempotent customer ensure before ingest (preserve CloudEvent body).
+    - branch:
+        request_map: |
+          root.client_id = this.data.client_id
+          root.external_user_id = this.data.external_user_id
+          root.auth_id = this.subject
+        processors:
+          - http:
+              url: http://127.0.0.1:8091/ensure
+              verb: POST
+              headers:
+                Content-Type: application/json
+              timeout: 10s
+        result_map: ""
+
 output:
-  http_client:
-    url: ${OPENMETER_INGEST_URL}
-    verb: POST
-    headers:
-      Authorization: "Bearer ${OPENMETER_API_KEY}"
-      Content-Type: application/cloudevents+json
-    successful_on:
-      - 200
-      - 202
-      - 204
+  fallback:
+    - http_client:
+        url: ${OPENMETER_INGEST_URL}
+        verb: POST
+        headers:
+          Authorization: "Bearer ${OPENMETER_API_KEY}"
+          Content-Type: application/cloudevents+json
+        successful_on:
+          - 200
+          - 202
+          - 204
+    # Self-heal: on ingest failure (e.g. no customer), ensure then retry once.
+    - processors:
+        - log:
+            level: WARN
+            message: "ingest failed, ensuring customer then retrying: ${! error() }"
+        - branch:
+            request_map: |
+              root.client_id = this.data.client_id
+              root.external_user_id = this.data.external_user_id
+              root.auth_id = this.subject
+            processors:
+              - http:
+                  url: http://127.0.0.1:8091/ensure
+                  verb: POST
+                  headers:
+                    Content-Type: application/json
+                  timeout: 10s
+            result_map: ""
+      http_client:
+        url: ${OPENMETER_INGEST_URL}
+        verb: POST
+        headers:
+          Authorization: "Bearer ${OPENMETER_API_KEY}"
+          Content-Type: application/cloudevents+json
+        successful_on:
+          - 200
+          - 202
+          - 204
