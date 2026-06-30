@@ -3,6 +3,7 @@ import { routeWebhookRequest } from "./protocol.mjs";
 import { createEndUserVerifierFromEnv } from "./verifiers.mjs";
 
 const port = Number(process.env.PORT || 8090);
+const MAX_BODY_BYTES = 64 * 1024;
 
 function required(name) {
   const value = process.env[name]?.trim();
@@ -22,7 +23,16 @@ const config = {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
+    let total = 0;
+    req.on("data", (chunk) => {
+      total += chunk.length;
+      if (total > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new Error("payload too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -35,9 +45,20 @@ async function handleRequest(req, res) {
     return;
   }
 
-  const host = req.headers.host || `localhost:${port}`;
-  const body =
-    req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
+  let body;
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    try {
+      body = await readBody(req);
+    } catch (err) {
+      if (err.message === "payload too large") {
+        res.writeHead(413, { "Content-Type": "text/plain" });
+        res.end("payload too large");
+        return;
+      }
+      throw err;
+    }
+  }
+
   const headers = new Headers();
   for (const [key, value] of Object.entries(req.headers)) {
     if (value === undefined) {
@@ -46,7 +67,7 @@ async function handleRequest(req, res) {
     headers.set(key, Array.isArray(value) ? value.join(", ") : value);
   }
 
-  const request = new Request(`http://${host}${req.url}`, {
+  const request = new Request(new URL(req.url, `http://localhost:${port}`), {
     method: req.method,
     headers,
     body: body?.length ? body : undefined,

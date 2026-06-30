@@ -11,8 +11,8 @@
 #   {"ethereum":{"usd":3456.78}}              # CoinGecko simple price API
 #   {"data":{"amount":"3456.78"}}             # Coinbase spot API
 #
-# Events ingest: POST ${OPENMETER_URL}/events (Konnect) or ${OPENMETER_URL}/api/v1/events
-# (self-hosted). entrypoint.sh appends the path when OPENMETER_URL is the API base.
+# Events ingest: OPENMETER_URL is normalized by entrypoint.sh (base URL -> full ingest
+# path) and used verbatim by the Benthos http_client output below.
 #
 # Identity (go-livepeer Kafka wire -> normalized CloudEvent egress):
 # - Upstream auth_id stays client_id:usage_subject (webhook -> go-livepeer state -> Kafka).
@@ -125,7 +125,7 @@ pipeline:
         let usage_subject_type = $data.usage_subject_type.or("external_user_id").string().trim()
 
         let eth_usd = meta("eth_usd_price").number()
-        root = if $eth_usd == null { throw("eth_usd price cache miss") }
+        let _ = if $eth_usd == null || $eth_usd <= 0 { throw("eth_usd price cache miss or non-positive") }
 
         let fee_wei = $data.computed_fee.number().or(0)
         let fee_usd_micros = ($fee_wei * $eth_usd / 1000000000000).round()

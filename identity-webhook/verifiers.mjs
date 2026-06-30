@@ -103,7 +103,8 @@ export function createOidcVerifier({
           audience: jwtAudience,
         }));
       } catch (err) {
-        throw new WebhookError(`oidc verification failed: ${err.message}`, {
+        console.warn(`oidc verification failed: ${err.message}`);
+        throw new WebhookError("oidc verification failed", {
           status: 401,
           code: "invalid_token",
         });

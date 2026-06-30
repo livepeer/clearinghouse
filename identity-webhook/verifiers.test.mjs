@@ -142,7 +142,7 @@ describe("createEndUserVerifierFromEnv", () => {
     );
   });
 
-  it("does not fall through to API-key when oidc mode rejects a JWT", async () => {
+  it("oidc verifier rejects a JWT missing a required scope", async () => {
     const { privateKey, jwks } = await (async () => {
       const { publicKey, privateKey } = await generateKeyPair("RS256");
       const jwk = await exportJWK(publicKey);
