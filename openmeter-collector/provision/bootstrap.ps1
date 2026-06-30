@@ -287,8 +287,10 @@ function Ensure-Subscription($customerId, $label) {
   if (-not $planKey) { Warn 'no plan_key in catalog; skipping subscription'; return }
   $existing = Items (Kapi-Get-Soft "/subscriptions?customer_id=$customerId") | Where-Object { $_.customer_id -eq $customerId }
   if ($existing) { Info "sub      $label - exists"; return }
-  $now = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-  $body = [ordered]@{ customer_id = $customerId; plan_key = $planKey; active_from = $now }
+  $body = [ordered]@{
+    customer = [ordered]@{ key = $label }
+    plan     = [ordered]@{ key = $planKey }
+  }
   $created = Kapi-Send-Soft 'post' '/subscriptions' ($body | ConvertTo-Json -Compress)
   if ($created) {
     Info "sub      $label - created on $planKey"

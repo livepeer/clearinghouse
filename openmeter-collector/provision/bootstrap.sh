@@ -348,10 +348,9 @@ ensure_subscription() {
     info "sub      $label — exists"
     return 0
   fi
-  local now body
-  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  body="$(jq -n --arg c "$customer_id" --arg p "$plan_key" --arg t "$now" \
-    '{customer_id:$c, plan_key:$p, active_from:$t}')"
+  local body
+  body="$(jq -n --arg ck "$label" --arg pk "$plan_key" \
+    '{customer:{key:$ck}, plan:{key:$pk}}')"
   if resp="$(printf '%s' "$body" | kapi_post_soft /subscriptions)" && [ -n "$resp" ]; then
     info "sub      $label — created on $plan_key"
   else
