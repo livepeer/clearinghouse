@@ -38,8 +38,8 @@ function Warn($m) { Write-Warning $m }
 if (-not (Get-Command kongctl -ErrorAction SilentlyContinue)) { Die 'kongctl not found (https://developer.konghq.com/kongctl/)' }
 if (-not (Test-Path $Catalog)) { Die "catalog not found: $Catalog" }
 
-# --- env file (openmeter-collector/.env) -----------------------------------
-$EnvFile = if ($env:ENV_FILE) { $env:ENV_FILE } else { Join-Path (Split-Path $ScriptDir -Parent) '.env' }
+# --- env file (repo-root .env) ---------------------------------------------
+$EnvFile = if ($env:ENV_FILE) { $env:ENV_FILE } else { Join-Path (Split-Path (Split-Path $ScriptDir -Parent) -Parent) '.env' }
 if (Test-Path $EnvFile) {
   Get-Content $EnvFile | ForEach-Object {
     if ($_ -match '^\s*#' -or $_ -match '^\s*$') { return }

@@ -35,10 +35,10 @@ command -v kongctl >/dev/null 2>&1 || die "kongctl not found (https://developer.
 command -v jq >/dev/null 2>&1 || die "jq not found"
 [ -f "$CATALOG" ] || die "catalog not found: $CATALOG"
 
-# --- env file (openmeter-collector/.env) -----------------------------------
+# --- env file (repo-root .env) ---------------------------------------------
 # Plain `source .env` does not export vars to child processes; load here so
 # `./bootstrap.sh catalog` works without `set -a; source …`.
-ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/../.env}"
+ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/../../.env}"
 if [ -f "$ENV_FILE" ]; then
   set -a
   # shellcheck disable=SC1090

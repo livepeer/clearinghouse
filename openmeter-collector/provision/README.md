@@ -16,7 +16,7 @@ the scripts are thin and idempotent.
 
 ## Configuration (env)
 
-Both scripts auto-load [`openmeter-collector/.env`](../.env) when present (override with
+Both scripts auto-load the repo-root [`.env`](../../.env) when present (override with
 `ENV_FILE`). Put your Konnect PAT there as `OPENMETER_API_KEY` — no need to `source` the
 file first (`source .env` does **not** export vars to child processes).
 
@@ -31,7 +31,7 @@ If `OPENMETER_URL` is unset, the scripts derive it from `OPENMETER_INGEST_URL` (
 One-time setup:
 
 ```bash
-cp openmeter-collector/.env.example openmeter-collector/.env
+cp .env.example .env   # at the repo root
 # edit OPENMETER_API_KEY=kpat_…
 # EU orgs: OPENMETER_URL=https://eu.api.konghq.com/v3/openmeter
 #          OPENMETER_INGEST_URL=https://eu.api.konghq.com/v3/openmeter/events
@@ -103,5 +103,5 @@ Walkthrough for provisioning against a fresh Konnect org:
 1. **Create org** — from the org picker, click **+ Create** to provision a clean Metering & Billing workspace.
 2. **Name the org** — e.g. *Clearinghouse Example Org*.
 3. **Create a Personal Access Token** — Profile menu → **Personal access tokens** → **Generate**. Copy the `kpat_…` token immediately (shown once).
-4. **Configure `.env`** — copy `openmeter-collector/.env.example` to `openmeter-collector/.env`, set `OPENMETER_API_KEY`, and set `OPENMETER_URL` / `OPENMETER_INGEST_URL` to your org's region (`us` or `eu`).
+4. **Configure `.env`** — copy `.env.example` to `.env` at the repo root, set `OPENMETER_API_KEY`, and set `OPENMETER_URL` / `OPENMETER_INGEST_URL` to your org's region (`us` or `eu`).
 5. **Run bootstrap** — `cd openmeter-collector/provision && ./bootstrap.sh catalog`. Re-run to confirm idempotency (`exists` / `active` lines, no errors).
