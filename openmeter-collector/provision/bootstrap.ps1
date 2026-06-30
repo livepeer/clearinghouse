@@ -45,7 +45,11 @@ if (Test-Path $EnvFile) {
     if ($_ -match '^\s*#' -or $_ -match '^\s*$') { return }
     if ($_ -match '^([^=]+)=(.*)$') {
       $k = $Matches[1].Trim()
-      if (-not (Test-Path "Env:$k")) { Set-Item -Path "Env:$k" -Value $Matches[2] }
+      $v = $Matches[2].Trim()
+      if (($v.StartsWith('"') -and $v.EndsWith('"')) -or ($v.StartsWith("'") -and $v.EndsWith("'"))) {
+        $v = $v.Substring(1, $v.Length - 2)
+      }
+      if (-not (Test-Path "Env:$k")) { Set-Item -Path "Env:$k" -Value $v }
     }
   }
 }
@@ -55,6 +59,9 @@ $pat = if ($env:KONGCTL_DEFAULT_KONNECT_PAT) { $env:KONGCTL_DEFAULT_KONNECT_PAT 
 if (-not $pat) { Die "no Konnect PAT — set KONGCTL_DEFAULT_KONNECT_PAT or OPENMETER_API_KEY in the environment or in $EnvFile" }
 $env:KONGCTL_DEFAULT_KONNECT_PAT = $pat
 
+if (-not $env:OPENMETER_URL -and $env:OPENMETER_INGEST_URL) {
+  $env:OPENMETER_URL = $env:OPENMETER_INGEST_URL.TrimEnd('/').Replace('/events', '')
+}
 $omUrl = if ($env:OPENMETER_URL) { $env:OPENMETER_URL } else { 'https://us.api.konghq.com/v3/openmeter' }
 $omUrl = $omUrl.TrimEnd('/')
 $BASE = [regex]::Replace($omUrl, '(https?://[^/]+).*', '$1')
@@ -64,19 +71,48 @@ if (-not $PREFIX) { $PREFIX = '/v3/openmeter' }
 $catalogObj = Get-Content -Raw $Catalog | ConvertFrom-Json
 
 # --- kongctl api helpers ---------------------------------------------------
+function Kapi-Err($method, $path, $detail) {
+  Die "kongctl api $method $path failed — check OPENMETER_URL ($omUrl) and your PAT: $detail"
+}
+function Kapi-Check($method, $path, $obj) {
+  if ($null -eq $obj) { Kapi-Err $method $path 'empty response' }
+  $msg = $obj.message
+  if (-not $msg) { $msg = $obj.detail }
+  if (-not $msg) { $msg = $obj.title }
+  $hasData = $obj.PSObject.Properties.Name -contains 'data' -or $obj.PSObject.Properties.Name -contains 'items'
+  if ($msg -and -not $hasData) { Kapi-Err $method $path $msg }
+}
 function Kapi-Get($path) {
-  $out = & kongctl api get "$PREFIX$path" --base-url $BASE -o json 2>$null
-  if ($LASTEXITCODE -ne 0) { return $null }
-  return ($out | ConvertFrom-Json)
+  $errFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $out = & kongctl api get "$PREFIX$path" --base-url $BASE -o json 2>$errFile
+    if ($LASTEXITCODE -ne 0) { Kapi-Err get $path (Get-Content -Raw $errFile) }
+    if (-not $out) { Kapi-Err get $path 'empty response' }
+    $obj = $out | ConvertFrom-Json
+    Kapi-Check get $path $obj
+    return $obj
+  }
+  finally { Remove-Item -Force $errFile -ErrorAction SilentlyContinue }
 }
 function Kapi-Send($method, $path, $bodyJson) {
-  $out = $bodyJson | & kongctl api $method "$PREFIX$path" --base-url $BASE -o json -f -
-  if ($LASTEXITCODE -ne 0) { throw "kongctl api $method $path failed" }
-  if ($out) { return ($out | ConvertFrom-Json) } else { return $null }
+  $errFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $out = $bodyJson | & kongctl api $method "$PREFIX$path" --base-url $BASE -o json -f - 2>$errFile
+    if ($LASTEXITCODE -ne 0) { Kapi-Err $method $path (Get-Content -Raw $errFile) }
+    if (-not $out) { return $null }
+    $obj = $out | ConvertFrom-Json
+    Kapi-Check $method $path $obj
+    return $obj
+  }
+  finally { Remove-Item -Force $errFile -ErrorAction SilentlyContinue }
 }
 function Kapi-Delete($path) {
-  & kongctl api delete "$PREFIX$path" --base-url $BASE -o json 2>$null | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "kongctl api delete $path failed" }
+  $errFile = [System.IO.Path]::GetTempFileName()
+  try {
+    & kongctl api delete "$PREFIX$path" --base-url $BASE -o json 2>$errFile | Out-Null
+    if ($LASTEXITCODE -ne 0) { Kapi-Err delete $path (Get-Content -Raw $errFile) }
+  }
+  finally { Remove-Item -Force $errFile -ErrorAction SilentlyContinue }
 }
 function Plan-ConfigKey {
   if ($catalogObj.plan -and $catalogObj.plan.key) { return $catalogObj.plan.key }

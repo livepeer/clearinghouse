@@ -24,13 +24,17 @@ file first (`source .env` does **not** export vars to child processes).
 | --- | --- | --- |
 | `KONGCTL_DEFAULT_KONNECT_PAT` | Konnect PAT (preferred). Falls back to `OPENMETER_API_KEY`. | from `.env` |
 | `OPENMETER_API_KEY` | Same PAT as the collector service. | from `.env` |
-| `OPENMETER_URL` | Metering API base. | `https://us.api.konghq.com/v3/openmeter` |
+| `OPENMETER_URL` | Metering API base. **Must match your Konnect org region** (US vs EU). | `https://us.api.konghq.com/v3/openmeter` |
+
+If `OPENMETER_URL` is unset, the scripts derive it from `OPENMETER_INGEST_URL` (strip `/events`).
 
 One-time setup:
 
 ```bash
 cp openmeter-collector/.env.example openmeter-collector/.env
 # edit OPENMETER_API_KEY=kpat_…
+# EU orgs: OPENMETER_URL=https://eu.api.konghq.com/v3/openmeter
+#          OPENMETER_INGEST_URL=https://eu.api.konghq.com/v3/openmeter/events
 ```
 
 ## Usage
@@ -91,3 +95,23 @@ expected compound key.
   link (e.g. created with an older bootstrap), the script deletes and recreates it.
 - Subscriptions are best-effort with `--subscribe`; plan pricing changes require a new
   plan version in Konnect (out of scope for this script).
+
+## Konnect first-time setup
+
+Walkthrough for provisioning against a fresh Konnect org (screenshots from a manual test run):
+
+1. **Create org** — from the org picker, click **+ Create** to provision a clean Metering & Billing workspace.
+
+   ![Create new Konnect org](docs/testing/01-create-org.png)
+
+2. **Name the org** — e.g. *Clearinghouse Example Org*.
+
+   ![Org name in profile menu](docs/testing/02-name-org-pat-nav.png)
+
+3. **Create a Personal Access Token** — Profile menu → **Personal access tokens** → **Generate**. Copy the `kpat_…` token immediately (shown once).
+
+   ![Generate PAT modal](docs/testing/03-generate-pat.png)
+
+4. **Configure `.env`** — copy `openmeter-collector/.env.example` to `openmeter-collector/.env`, set `OPENMETER_API_KEY`, and set `OPENMETER_URL` / `OPENMETER_INGEST_URL` to your org's region (`us` or `eu`).
+
+5. **Run bootstrap** — `cd openmeter-collector/provision && ./bootstrap.sh catalog`. Re-run to confirm idempotency (`exists` / `active` lines, no errors).

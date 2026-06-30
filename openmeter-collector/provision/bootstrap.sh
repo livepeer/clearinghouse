@@ -16,8 +16,7 @@
 #
 #   ./bootstrap.sh customer <client_id> <external_user_id> [display_name] [--subscribe]
 #       Ensure an OpenMeter customer keyed <client_id>:<external_user_id> exists with
-#       subject_keys = [<external_user_id> (bare, matches the CloudEvent subject),
-#                       <client_id>:<external_user_id> (compound, tenant-scoped)].
+#       subject_keys = [<client_id>:<external_user_id>] (matches the CloudEvent subject).
 #       --subscribe also ensures a subscription on the catalog plan (best-effort).
 #
 #   ./bootstrap.sh all <client_id> <external_user_id> [display_name] [--subscribe]
@@ -54,6 +53,9 @@ if [ -z "$PAT" ]; then
 fi
 export KONGCTL_DEFAULT_KONNECT_PAT="$PAT"
 
+if [ -z "${OPENMETER_URL:-}" ] && [ -n "${OPENMETER_INGEST_URL:-}" ]; then
+  OPENMETER_URL="${OPENMETER_INGEST_URL%/events}"
+fi
 OPENMETER_URL="${OPENMETER_URL:-https://us.api.konghq.com/v3/openmeter}"
 OPENMETER_URL="${OPENMETER_URL%/}"
 BASE="$(printf '%s' "$OPENMETER_URL" | sed -E 's#(https?://[^/]+).*#\1#')"
@@ -61,10 +63,61 @@ PREFIX="$(printf '%s' "$OPENMETER_URL" | sed -E 's#https?://[^/]+##')"
 [ -n "$PREFIX" ] || PREFIX="/v3/openmeter"
 
 # --- kongctl api helpers (return response body as JSON on stdout) ----------
-kapi_get()    { kongctl api get    "$PREFIX$1" --base-url "$BASE" -o json; }
-kapi_post()   { kongctl api post   "$PREFIX$1" --base-url "$BASE" -o json -f -; }
-kapi_put()    { kongctl api put    "$PREFIX$1" --base-url "$BASE" -o json -f -; }
-kapi_delete() { kongctl api delete "$PREFIX$1" --base-url "$BASE" -o json; }
+kapi_err() {
+  local method="$1" path="$2" err="$3"
+  die "kongctl api $method $path failed — check OPENMETER_URL ($OPENMETER_URL) and your PAT: $err"
+}
+
+kapi_check() {
+  local method="$1" path="$2" body="$3"
+  if [ -z "$body" ]; then
+    kapi_err "$method" "$path" "empty response"
+  fi
+  if printf '%s' "$body" | jq -e 'type == "object" and (.message // .detail // .title // empty) != "" and (.data // .items // null) == null' >/dev/null 2>&1; then
+    kapi_err "$method" "$path" "$(printf '%s' "$body" | jq -r '.message // .detail // .title')"
+  fi
+}
+
+kapi_get() {
+  local path="$1" body err
+  err="$(mktemp)"
+  if ! body="$(kongctl api get "$PREFIX$path" --base-url "$BASE" -o json 2>"$err")"; then
+    kapi_err get "$path" "$(cat "$err")"
+  fi
+  rm -f "$err"
+  kapi_check get "$path" "$body"
+  printf '%s' "$body"
+}
+kapi_post() {
+  local path="$1" body err
+  err="$(mktemp)"
+  if ! body="$(kongctl api post "$PREFIX$path" --base-url "$BASE" -o json -f - 2>"$err")"; then
+    kapi_err post "$path" "$(cat "$err")"
+  fi
+  rm -f "$err"
+  kapi_check post "$path" "$body"
+  printf '%s' "$body"
+}
+kapi_put() {
+  local path="$1" body err
+  err="$(mktemp)"
+  if ! body="$(kongctl api put "$PREFIX$path" --base-url "$BASE" -o json -f - 2>"$err")"; then
+    kapi_err put "$path" "$(cat "$err")"
+  fi
+  rm -f "$err"
+  kapi_check put "$path" "$body"
+  printf '%s' "$body"
+}
+kapi_delete() {
+  local path="$1" body err
+  err="$(mktemp)"
+  if ! body="$(kongctl api delete "$PREFIX$path" --base-url "$BASE" -o json 2>"$err")"; then
+    kapi_err delete "$path" "$(cat "$err")"
+  fi
+  rm -f "$err"
+  [ -n "$body" ] && kapi_check delete "$path" "$body" || true
+  printf '%s' "$body"
+}
 
 plan_config_key() { jq -r '.plan.key // .plan_key // empty' "$CATALOG"; }
 
