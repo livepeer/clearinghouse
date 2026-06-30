@@ -7,10 +7,13 @@
  *
  * - createApiKeyVerifier: resolves `sk_…` keys via a caller-supplied lookup.
  * - createOidcVerifier:   verifies a JWT bearer against an OIDC issuer's JWKS (jose).
- * - createFirstMatchVerifier: tries verifiers in order (OIDC then API key, etc.).
+ * - createEndUserVerifierFromEnv: picks exactly one verifier via IDENTITY_AUTH_MODE.
  */
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { bearerToken, WebhookError } from "./protocol.mjs";
+import { loadApiKeyStore } from "./keys.mjs";
+
+export const IDENTITY_AUTH_MODES = ["api_key", "oidc"];
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -141,28 +144,60 @@ export function createOidcVerifier({
   };
 }
 
-/** Try each verifier in order; return the first match, else throw the last error. */
-export function createFirstMatchVerifier(verifiers) {
-  const list = verifiers.filter(Boolean);
-  if (!list.length) {
-    throw new Error("createFirstMatchVerifier: at least one verifier required");
+function envTrim(env, name) {
+  return env[name]?.trim() || "";
+}
+
+function envOptional(env, name, fallback) {
+  return envTrim(env, name) || fallback;
+}
+
+/**
+ * Build the end-user verifier from env. IDENTITY_AUTH_MODE selects exactly one
+ * verifier — no fallback between OIDC and API-key paths.
+ */
+export function createEndUserVerifierFromEnv(env) {
+  const issuer = envTrim(env, "IDENTITY_ISSUER");
+  if (!issuer) {
+    throw new Error("IDENTITY_ISSUER is required");
   }
-  const adminRoutes = list.flatMap((v) => v.adminRoutes ?? []);
-  return {
-    kind: "composite",
-    adminRoutes: adminRoutes.length ? adminRoutes : undefined,
-    verify: async (context) => {
-      let lastErr;
-      for (const verifier of list) {
-        try {
-          return await verifier.verify(context);
-        } catch (err) {
-          lastErr = err;
-        }
-      }
-      throw (
-        lastErr ?? new WebhookError("no verifier matched", { status: 401, code: "invalid_credentials" })
-      );
-    },
-  };
+
+  const mode = envTrim(env, "IDENTITY_AUTH_MODE");
+  if (!IDENTITY_AUTH_MODES.includes(mode)) {
+    throw new Error(`IDENTITY_AUTH_MODE is required (${IDENTITY_AUTH_MODES.join(" | ")})`);
+  }
+
+  if (mode === "api_key") {
+    if (!envTrim(env, "DEMO_API_KEY") && !envTrim(env, "DEMO_API_KEYS")) {
+      throw new Error("api_key mode requires DEMO_API_KEY and/or DEMO_API_KEYS");
+    }
+    const keyStore = loadApiKeyStore(env);
+    return createApiKeyVerifier({
+      issuer,
+      apiKeyPrefix: envOptional(env, "API_KEY_PREFIX", "sk_"),
+      defaultClientId: envOptional(env, "DEMO_CLIENT_ID", "demo-client"),
+      defaultUsageSubjectType: envOptional(env, "USAGE_SUBJECT_TYPE", "api_key_user"),
+      resolveApiKey: async (apiKey) => keyStore.get(apiKey) ?? null,
+    });
+  }
+
+  if (!envTrim(env, "OIDC_ISSUER")) {
+    throw new Error("oidc mode requires OIDC_ISSUER");
+  }
+  if (!envTrim(env, "OIDC_AUDIENCE")) {
+    throw new Error("oidc mode requires OIDC_AUDIENCE");
+  }
+
+  return createOidcVerifier({
+    jwtIssuer: envTrim(env, "OIDC_ISSUER"),
+    jwtAudience: envTrim(env, "OIDC_AUDIENCE"),
+    jwksUri: envTrim(env, "OIDC_JWKS_URI") || undefined,
+    issuer,
+    clientClaim: envOptional(env, "OIDC_CLIENT_CLAIM", "azp"),
+    subjectClaim: envOptional(env, "OIDC_SUBJECT_CLAIM", "sub"),
+    subjectTypeValue: envOptional(env, "OIDC_SUBJECT_TYPE", "oidc_user"),
+    requiredScopes: (envTrim(env, "OIDC_REQUIRED_SCOPES") || "")
+      .split(/[\s,]+/)
+      .filter(Boolean),
+  });
 }

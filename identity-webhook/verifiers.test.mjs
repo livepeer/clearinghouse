@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
 import {
   createApiKeyVerifier,
-  createFirstMatchVerifier,
+  createEndUserVerifierFromEnv,
   createOidcVerifier,
 } from "./verifiers.mjs";
 
@@ -119,8 +119,30 @@ describe("createOidcVerifier (jose, locally-minted JWT)", () => {
   });
 });
 
-describe("createFirstMatchVerifier", () => {
-  it("falls through OIDC (non-JWT) to the API-key verifier", async () => {
+describe("createEndUserVerifierFromEnv", () => {
+  const apiKeyEnv = {
+    IDENTITY_ISSUER: ISSUER,
+    IDENTITY_AUTH_MODE: "api_key",
+    DEMO_API_KEY: "sk_demo",
+    DEMO_CLIENT_ID: "demo-client",
+    DEMO_USER_ID: "demo-user",
+  };
+
+  it("builds an API-key verifier when IDENTITY_AUTH_MODE=api_key", async () => {
+    const verifier = createEndUserVerifierFromEnv(apiKeyEnv);
+    assert.equal(verifier.kind, "api_key");
+    const { identity } = await verifier.verify({ authorization: "Bearer sk_demo" });
+    assert.equal(identity.usage_subject, "demo-user");
+  });
+
+  it("rejects oidc mode without OIDC_ISSUER", () => {
+    assert.throws(
+      () => createEndUserVerifierFromEnv({ ...apiKeyEnv, IDENTITY_AUTH_MODE: "oidc" }),
+      /oidc mode requires OIDC_ISSUER/,
+    );
+  });
+
+  it("does not fall through to API-key when oidc mode rejects a JWT", async () => {
     const { privateKey, jwks } = await (async () => {
       const { publicKey, privateKey } = await generateKeyPair("RS256");
       const jwk = await exportJWK(publicKey);
@@ -130,18 +152,7 @@ describe("createFirstMatchVerifier", () => {
       return { privateKey, jwks };
     })();
 
-    const store = new Map([["sk_demo", { userId: "demo-user", clientId: "demo-client" }]]);
-    const composite = createFirstMatchVerifier([
-      createOidcVerifier({ jwtIssuer: "https://idp.test/", jwtAudience: "clearinghouse", jwks }),
-      createApiKeyVerifier({ issuer: ISSUER, resolveApiKey: async (k) => store.get(k) ?? null }),
-    ]);
-
-    // An sk_ key is not a JWT → OIDC throws → API-key verifier resolves it.
-    const apiKeyResult = await composite.verify({ authorization: "Bearer sk_demo" });
-    assert.equal(apiKeyResult.identity.usage_subject, "demo-user");
-
-    // A real JWT → OIDC verifier resolves it first.
-    const token = await new SignJWT({ azp: "app-b" })
+    const token = await new SignJWT({ azp: "app-b", scope: "other" })
       .setProtectedHeader({ alg: "RS256", kid: "k" })
       .setIssuer("https://idp.test/")
       .setAudience("clearinghouse")
@@ -149,16 +160,33 @@ describe("createFirstMatchVerifier", () => {
       .setIssuedAt()
       .setExpirationTime("5m")
       .sign(privateKey);
-    const oidcResult = await composite.verify({ authorization: `Bearer ${token}` });
-    assert.equal(oidcResult.identity.usage_subject, "user-b");
-    assert.equal(oidcResult.identity.usage_subject_type, "oidc_user");
+
+    const verifier = createOidcVerifier({
+      jwtIssuer: "https://idp.test/",
+      jwtAudience: "clearinghouse",
+      jwks,
+      issuer: ISSUER,
+      requiredScopes: ["signer.use"],
+    });
+
+    await assert.rejects(
+      () => verifier.verify({ authorization: `Bearer ${token}` }),
+      /missing required scope/,
+    );
   });
 
-  it("throws the last error when nothing matches", async () => {
-    const store = new Map();
-    const composite = createFirstMatchVerifier([
-      createApiKeyVerifier({ issuer: ISSUER, resolveApiKey: async (k) => store.get(k) ?? null }),
-    ]);
-    await assert.rejects(() => composite.verify({ authorization: "Bearer sk_missing" }), /invalid api key/);
+  it("oidc mode does not accept sk_ API keys", async () => {
+    const verifier = createEndUserVerifierFromEnv({
+      IDENTITY_ISSUER: ISSUER,
+      IDENTITY_AUTH_MODE: "oidc",
+      OIDC_ISSUER: "https://idp.test/",
+      OIDC_AUDIENCE: "clearinghouse",
+    });
+
+    assert.equal(verifier.kind, "oidc");
+    await assert.rejects(
+      () => verifier.verify({ authorization: "Bearer sk_demo" }),
+      /not a JWT/,
+    );
   });
 });

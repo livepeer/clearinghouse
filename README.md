@@ -27,7 +27,7 @@ Signer HTTP request
 
 **Redpanda over Apache Kafka.** The stack uses Redpanda as the Kafka-compatible broker. Redpanda runs as a single-binary dev container with no ZooKeeper dependency and faster local startup.
 
-**Identity & auth.** The in-compose **identity-webhook** is self-contained: it implements go-livepeer's remote-signer webhook wire protocol in-repo (`identity-webhook/protocol.mjs`) and pluggable end-user verifiers (`identity-webhook/verifiers.mjs`) — an API-key verifier and an OAuth/OIDC verifier built on [`jose`](https://github.com/panva/jose). The signer container runs `go-livepeer` directly; every signing request is authorized by go-livepeer's `-remoteSignerWebhookUrl` hook, which calls `/authorize` with `Authorization: Bearer <WEBHOOK_SECRET>`. End users present their credential to the signer — `Authorization: Bearer sk_…` (API key) or `Authorization: Bearer <jwt>` (OIDC) — and the webhook resolves it to `auth_id = "{client_id}:{usage_subject}"`. Set `OIDC_ISSUER`/`OIDC_AUDIENCE` to enable bring-your-own-OAuth (JWTs verified against your IdP's JWKS); configure both API keys and OIDC to accept either. For local alive checks only, leave `REMOTE_SIGNER_WEBHOOK_URL` empty to omit the webhook hook.
+**Identity & auth.** The in-compose **identity-webhook** is self-contained: it implements go-livepeer's remote-signer webhook wire protocol in-repo (`identity-webhook/protocol.mjs`) and pluggable end-user verifiers (`identity-webhook/verifiers.mjs`) — an API-key verifier and an OAuth/OIDC verifier built on [`jose`](https://github.com/panva/jose). Set `IDENTITY_AUTH_MODE` to `api_key` or `oidc` to select exactly one verifier (no fallback). The signer container runs `go-livepeer` directly; every signing request is authorized by go-livepeer's `-remoteSignerWebhookUrl` hook, which calls `/authorize` with `Authorization: Bearer <WEBHOOK_SECRET>`. End users present their credential to the signer — `Authorization: Bearer sk_…` (API key mode) or `Authorization: Bearer <jwt>` (OIDC mode) — and the webhook resolves it to `auth_id = "{client_id}:{usage_subject}"`. For local alive checks only, leave `REMOTE_SIGNER_WEBHOOK_URL` empty to omit the webhook hook.
 
 **CLI port not exposed.** go-livepeer's `-cliAddr` (admin/RPC) is bound to `127.0.0.1:4935` inside the container and is never published or mapped to the host.
 
@@ -54,12 +54,16 @@ Start here before wiring metering. This runs the broker, identity webhook, and r
 ```bash
 cp .env.example .env
 $EDITOR .env
-# For a local alive check without an identity webhook:
-#   REMOTE_SIGNER_WEBHOOK_URL=
-#   WEBHOOK_SECRET=
 
 docker compose up -d --build kafka identity-webhook remote-signer
 docker compose logs -f remote-signer
+```
+
+Signer-only alive check (no identity webhook — omit the service and clear the signer hook URL; leave `WEBHOOK_SECRET` and other identity-webhook vars unchanged in `.env`):
+
+```bash
+# In .env: REMOTE_SIGNER_WEBHOOK_URL=
+docker compose up -d --build kafka remote-signer
 ```
 
 Verify the identity webhook (simulates go-livepeer calling `/authorize`; secret matches `.env.example`):
@@ -79,7 +83,7 @@ Smoketests:
 
 ```bash
 docker compose ps
-# kafka "healthy", identity-webhook "healthy", remote-signer "Up"
+# kafka "healthy"; with identity-webhook started, it should also be "healthy"; remote-signer "Up"
 
 curl -fsS -X POST http://localhost:8081/sign-orchestrator-info
 # {"address":"0x…","signature":"0x…"} — keystore unlocked, signer can sign
@@ -128,7 +132,7 @@ All variables are documented in [`.env.example`](.env.example), grouped by servi
 
 | Service | Key variables |
 | --- | --- |
-| `identity-webhook` | `WEBHOOK_SECRET`, `IDENTITY_ISSUER`, `DEMO_API_KEY`, `DEMO_CLIENT_ID`, `DEMO_USER_ID`, `API_KEY_PREFIX` (optional, default `sk_`), `OIDC_*` (optional) |
+| `identity-webhook` | `WEBHOOK_SECRET`, `IDENTITY_ISSUER`, `IDENTITY_AUTH_MODE` (`api_key` \| `oidc`), `DEMO_API_KEY`, `DEMO_CLIENT_ID`, `DEMO_USER_ID`, `API_KEY_PREFIX` (optional, default `sk_`), `OIDC_*` (when `oidc`) |
 | `kafka` | `KAFKA_ADVERTISED_ADDR` |
 | `remote-signer` | `REMOTE_SIGNER_WEBHOOK_URL`, `WEBHOOK_SECRET`, `SIGNER_*`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC` |
 | `openmeter-collector` | `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`, `OPENMETER_INGEST_URL`, `OPENMETER_API_KEY`, `PRICE_ORACLE_URL`, `PRICE_ORACLE_REFRESH` |
