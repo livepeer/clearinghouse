@@ -55,8 +55,6 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-      identity-webhook:
-        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
