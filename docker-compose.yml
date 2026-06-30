@@ -52,6 +52,7 @@ services:
       context: .
       dockerfile: remote-signer/Dockerfile
     restart: unless-stopped
+    # Kafka only — identity-webhook is optional (signer-only alive checks).
     depends_on:
       kafka:
         condition: service_healthy

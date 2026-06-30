@@ -11,8 +11,8 @@
 #   {"ethereum":{"usd":3456.78}}              # CoinGecko simple price API
 #   {"data":{"amount":"3456.78"}}             # Coinbase spot API
 #
-# Konnect ingest: POST {OPENMETER_INGEST_URL} (set to ${OPENMETER_URL}/events).
-# Self-hosted OpenMeter: ${OPENMETER_URL}/api/v1/events
+# Events ingest: POST ${OPENMETER_URL}/events (Konnect) or ${OPENMETER_URL}/api/v1/events
+# (self-hosted). entrypoint.sh appends the path when OPENMETER_URL is the API base.
 #
 # Identity (go-livepeer Kafka wire -> normalized CloudEvent egress):
 # - Upstream auth_id stays client_id:usage_subject (webhook -> go-livepeer state -> Kafka).
@@ -168,7 +168,7 @@ pipeline:
 
 output:
   http_client:
-    url: ${OPENMETER_INGEST_URL}
+    url: ${OPENMETER_URL}
     verb: POST
     headers:
       Authorization: "Bearer ${OPENMETER_API_KEY}"

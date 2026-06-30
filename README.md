@@ -11,7 +11,7 @@ Docker Compose stack for the clearinghouse runtime:
 | **Redpanda** (`kafka`) | Kafka-compatible event bus. The signer publishes gateway events; the collector consumes them. | [Redpanda docs](https://docs.redpanda.com/) |
 | **go-livepeer remote signer** (`remote-signer`) | Signs Livepeer payment tickets and emits `create_signed_ticket` events to Kafka. | [go-livepeer](https://github.com/livepeer/go-livepeer) |
 | **OpenMeter collector** (`openmeter-collector`) | Benthos pipeline: filters Kafka events, converts fees to USD micros, POSTs CloudEvents to OpenMeter ingest. | [OpenMeter collector](https://openmeter.io/docs/collectors) |
-| **Konnect / OpenMeter** (external) | Hosted metering and billing API. Set `OPENMETER_INGEST_URL` to your ingest endpoint. | [Konnect OpenMeter](https://docs.konghq.com/konnect/openmeter/), [self-hosted OpenMeter](https://openmeter.io/docs/deploy/kubernetes) |
+| **Konnect / OpenMeter** (external) | Hosted metering and billing API. Set `OPENMETER_URL` to your OpenMeter API base; the collector appends the events path. | [Konnect OpenMeter](https://docs.konghq.com/konnect/openmeter/), [self-hosted OpenMeter](https://openmeter.io/docs/deploy/kubernetes) |
 
 Data flow:
 
@@ -128,16 +128,39 @@ Re-runs are dedup-safe (OpenMeter deduplicates by event id). A real signer-emitt
 
 ## Environment variables
 
-All variables are documented in [`.env.example`](.env.example), grouped by service:
+Canonical copy with inline comments: [`.env.example`](.env.example). Summary by service:
 
 | Service | Key variables |
 | --- | --- |
-| `identity-webhook` | `WEBHOOK_SECRET`, `IDENTITY_ISSUER`, `IDENTITY_AUTH_MODE` (`api_key` \| `oidc`), `DEMO_API_KEY`, `DEMO_CLIENT_ID`, `DEMO_USER_ID`, `API_KEY_PREFIX` (optional, default `sk_`), `OIDC_*` (when `oidc`) |
+| `identity-webhook` | [`identity-webhook` variables](#identity-webhook) below |
 | `kafka` | `KAFKA_ADVERTISED_ADDR` |
 | `remote-signer` | `REMOTE_SIGNER_WEBHOOK_URL`, `WEBHOOK_SECRET`, `SIGNER_*`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC` |
-| `openmeter-collector` | `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`, `OPENMETER_INGEST_URL`, `OPENMETER_API_KEY`, `PRICE_ORACLE_URL`, `PRICE_ORACLE_REFRESH` |
+| `openmeter-collector` | `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`, `OPENMETER_URL`, `OPENMETER_API_KEY`, `PRICE_ORACLE_URL`, `PRICE_ORACLE_REFRESH` |
 
 Shared keys (`WEBHOOK_SECRET`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`) are listed once at the top of `.env.example`.
+
+#### `identity-webhook`
+
+| Variable | When | Notes |
+| --- | --- | --- |
+| `WEBHOOK_SECRET` | always | Shared with `remote-signer`; authenticates go-livepeer's `/authorize` caller |
+| `IDENTITY_ISSUER` | always | Issuer stamped on resolved identities (e.g. `http://identity-webhook:8090`) |
+| `IDENTITY_AUTH_MODE` | always | `api_key` or `oidc` — exactly one verifier, no fallback |
+| `DEMO_API_KEY` | `api_key` | Primary demo key; Bearer token end users send to the signer |
+| `DEMO_CLIENT_ID` | `api_key` | Tenant for `DEMO_API_KEY` (default `demo-client`) |
+| `DEMO_USER_ID` | `api_key` | End user for `DEMO_API_KEY` (default `demo-user`) |
+| `DEMO_API_KEYS` | `api_key`, optional | JSON map of extra keys, e.g. `{"sk_other":{"clientId":"app-b","userId":"user-b"}}` |
+| `USAGE_SUBJECT_TYPE` | `api_key`, optional | Default `api_key_user`; stamped on API-key identities |
+| `API_KEY_PREFIX` | `api_key`, optional | Default `sk_` |
+| `OIDC_ISSUER` | `oidc` | JWT issuer / JWKS host |
+| `OIDC_AUDIENCE` | `oidc` | Expected JWT audience |
+| `OIDC_JWKS_URI` | `oidc`, optional | Defaults to `${OIDC_ISSUER}/.well-known/jwks.json` |
+| `OIDC_CLIENT_CLAIM` | `oidc`, optional | Tenant claim (default `azp`; Auth0 clearinghouse uses `app_client_id`) |
+| `OIDC_SUBJECT_CLAIM` | `oidc`, optional | End-user claim (default `sub`; Auth0 clearinghouse uses `external_user_id`) |
+| `OIDC_SUBJECT_TYPE` | `oidc`, optional | Default `oidc_user`; Auth0 clearinghouse uses `external_user_id` |
+| `OIDC_REQUIRED_SCOPES` | `oidc`, optional | Space- or comma-separated required scopes (e.g. `sign:job`) |
+
+`PORT` is set by Compose (`8090`), not `.env`. See the `identity-webhook` block in [`.env.example`](.env.example) for Auth0 vs generic OIDC examples.
 
 Signer state (keystore, `.eth-password`, chain DB) is stored under [`remote-signer/data/`](remote-signer/data/), bind-mounted to `/data` in the container.
 
