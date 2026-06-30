@@ -1,25 +1,45 @@
-# Clearinghouse stack: Redpanda + go-livepeer remote signer + OpenMeter collector.
+# Clearinghouse stack: identity webhook + Redpanda + remote signer + OpenMeter collector.
 #
 # Redpanda is the Kafka-compatible broker. The signer container runs go-livepeer directly —
-# only its signing HTTP port (8081) is published to the host. The CLI/admin port (-cliAddr)
-# is bound to loopback inside the container and is never exposed or published.
+# only its signing HTTP port (8081) is published to the host on loopback (127.0.0.1).
+# The CLI/admin port (-cliAddr) is bound to loopback inside the container and is never
+# published. To expose the signing port on all interfaces, add a Compose override:
+#   services.remote-signer.ports: ["8081:8081"]
+# Only do this when REMOTE_SIGNER_WEBHOOK_URL is set — an unauthenticated signer on the
+# LAN can drain deposits.
 #
-# Per-service config: copy each service's .env.example to .env before starting.
+# Stack config: copy .env.example to .env at the repo root before starting.
 #
 # Full stack:
 #   docker compose up -d --build
 #
-# Kafka + signer only (no metering):
-#   docker compose up -d --build kafka remote-signer
+# Kafka + identity webhook + signer only (no metering):
+#   docker compose up -d --build kafka identity-webhook remote-signer
 
 services:
+  identity-webhook:
+    build:
+      context: .
+      dockerfile: identity-webhook/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      PORT: "8090"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
   kafka:
     build:
       context: .
       dockerfile: kafka/Dockerfile
     restart: unless-stopped
     volumes:
-      - ./kafka/.env:/service/.env:ro
+      - ./.env:/service/.env:ro
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy'"]
       interval: 10s
@@ -32,17 +52,16 @@ services:
       context: .
       dockerfile: remote-signer/Dockerfile
     restart: unless-stopped
+    # Kafka only — identity-webhook is optional (signer-only alive checks).
     depends_on:
       kafka:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      # Loopback only — the signer mints payments with no auth when the webhook is unset.
-      # Use "0.0.0.0:8081:8081" to expose remotely ONLY with REMOTE_SIGNER_WEBHOOK_URL set.
       - "127.0.0.1:8081:8081"
     volumes:
-      - ./remote-signer/.env:/service/.env:ro
+      - ./.env:/service/.env:ro
       - ./remote-signer/data:/data
 
   openmeter-collector:
@@ -54,7 +73,7 @@ services:
       kafka:
         condition: service_healthy
     volumes:
-      - ./openmeter-collector/.env:/service/.env:ro
+      - ./.env:/service/.env:ro
 
 # Signer datadir is bind-mounted from remote-signer/data.
 # Copy keystore + .eth-password into remote-signer/data before first run.

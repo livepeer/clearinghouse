@@ -1,0 +1,16 @@
+{
+  "name": "@livepeer/clearinghouse-identity-webhook",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "API-key + OIDC identity webhook for go-livepeer remote signer (jose)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  }
+}

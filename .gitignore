@@ -1,4 +1,7 @@
-kafka/.env
-remote-signer/.env
-openmeter-collector/.env
+.env
 remote-signer/data/
+node_modules/
+
+# Editor / OS
+.vscode/
+.DS_Store
