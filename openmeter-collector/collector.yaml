@@ -57,7 +57,6 @@ input:
       - label: price_warm
         generate:
           count: 1
-          interval: ""
           mapping: 'root = {}'
         processors:
           - resource: fetch_eth_usd_price
