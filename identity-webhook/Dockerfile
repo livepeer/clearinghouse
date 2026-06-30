@@ -7,7 +7,7 @@ WORKDIR /app
 COPY identity-webhook/package.json identity-webhook/package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY identity-webhook/keys.mjs identity-webhook/server.mjs ./
+COPY identity-webhook/keys.mjs identity-webhook/protocol.mjs identity-webhook/verifiers.mjs identity-webhook/server.mjs ./
 
 ENV PORT=8090
 

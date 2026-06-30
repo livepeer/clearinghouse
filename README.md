@@ -7,7 +7,7 @@ Docker Compose stack for the clearinghouse runtime:
 
 | Service | Role | Docs |
 | --- | --- | --- |
-| **identity-webhook** (`identity-webhook`) | Resolves end-user API keys to `auth_id` for go-livepeer's `/authorize` hook. Uses builder-sdk's API-key provider. | [builder-sdk](https://github.com/pymthouse/builder-sdk) |
+| **identity-webhook** (`identity-webhook`) | Resolves end-user credentials (API keys and/or OAuth/OIDC JWTs) to `auth_id` for go-livepeer's `/authorize` hook. Self-contained: implements the go-livepeer webhook wire protocol in-repo, verifying JWTs with `jose`. | [jose](https://github.com/panva/jose) |
 | **Redpanda** (`kafka`) | Kafka-compatible event bus. The signer publishes gateway events; the collector consumes them. | [Redpanda docs](https://docs.redpanda.com/) |
 | **go-livepeer remote signer** (`remote-signer`) | Signs Livepeer payment tickets and emits `create_signed_ticket` events to Kafka. | [go-livepeer](https://github.com/livepeer/go-livepeer) |
 | **OpenMeter collector** (`openmeter-collector`) | Benthos pipeline: filters Kafka events, converts fees to USD micros, POSTs CloudEvents to OpenMeter ingest. | [OpenMeter collector](https://openmeter.io/docs/collectors) |
@@ -27,7 +27,7 @@ Signer HTTP request
 
 **Redpanda over Apache Kafka.** The stack uses Redpanda as the Kafka-compatible broker. Redpanda runs as a single-binary dev container with no ZooKeeper dependency and faster local startup.
 
-**Identity & auth.** The in-compose **identity-webhook** uses builder-sdk's API-key provider. The signer container runs `go-livepeer` directly; every signing request is authorized by go-livepeer's `-remoteSignerWebhookUrl` hook, which calls `/authorize` with `Authorization: Bearer <WEBHOOK_SECRET>`. End users present `Authorization: Bearer sk_…` to the signer; the webhook resolves the key to `auth_id = "{client_id}:{usage_subject}"`. For local alive checks only, leave `REMOTE_SIGNER_WEBHOOK_URL` empty to omit the webhook hook.
+**Identity & auth.** The in-compose **identity-webhook** is self-contained: it implements go-livepeer's remote-signer webhook wire protocol in-repo (`identity-webhook/protocol.mjs`) and pluggable end-user verifiers (`identity-webhook/verifiers.mjs`) — an API-key verifier and an OAuth/OIDC verifier built on [`jose`](https://github.com/panva/jose). The signer container runs `go-livepeer` directly; every signing request is authorized by go-livepeer's `-remoteSignerWebhookUrl` hook, which calls `/authorize` with `Authorization: Bearer <WEBHOOK_SECRET>`. End users present their credential to the signer — `Authorization: Bearer sk_…` (API key) or `Authorization: Bearer <jwt>` (OIDC) — and the webhook resolves it to `auth_id = "{client_id}:{usage_subject}"`. Set `OIDC_ISSUER`/`OIDC_AUDIENCE` to enable bring-your-own-OAuth (JWTs verified against your IdP's JWKS); configure both API keys and OIDC to accept either. For local alive checks only, leave `REMOTE_SIGNER_WEBHOOK_URL` empty to omit the webhook hook.
 
 **CLI port not exposed.** go-livepeer's `-cliAddr` (admin/RPC) is bound to `127.0.0.1:4935` inside the container and is never published or mapped to the host. Only the signing HTTP port (`8081`) is exposed.
 
