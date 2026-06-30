@@ -79,7 +79,7 @@ Smoketests:
 
 ```bash
 docker compose ps
-# kafka "healthy", identity-webhook "healthy" (signer waits for both), remote-signer "Up"
+# kafka "healthy", identity-webhook "healthy", remote-signer "Up"
 
 curl -fsS -X POST http://localhost:8081/sign-orchestrator-info
 # {"address":"0x…","signature":"0x…"} — keystore unlocked, signer can sign
