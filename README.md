@@ -130,7 +130,13 @@ To change the host signing port from `8081`, use a Compose override file.
 ## OpenMeter/Konnect bootstrap
 
 Provision meters, features, and the default pay-per-use plan before starting the collector.
-Use the Go `clearinghouse-bootstrap` CLI or your existing Konnect setup.
+Use the [`kongctl` bootstrap scripts](openmeter-collector/provision/README.md) or your existing Konnect setup.
+
+```bash
+cd openmeter-collector/provision
+./bootstrap.sh catalog
+./bootstrap.sh customer demo-client demo-user "Demo User"
+```
 
 Creates:
 
@@ -155,7 +161,7 @@ Signer computed_fee (wei)
             → clearinghouse_default_ppu subscription per customer
 ```
 
-Markup rules are defined in the bootstrap CLI catalog. Collector
+Markup rules are defined in [`openmeter-collector/provision/catalog.json`](openmeter-collector/provision/catalog.json). Collector
 pipeline config: [`openmeter-collector/collector.yaml`](openmeter-collector/collector.yaml).
 The collector does not yet emit `billable_usd_micros` (phase 2); until then the billable meter
 stays empty while the catalog is ready.
