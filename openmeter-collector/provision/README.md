@@ -70,7 +70,7 @@ From [`catalog.json`](catalog.json):
 | Kind | Key | Notes |
 | --- | --- | --- |
 | Meter | `network_fee_usd_micros` | SUM of `$.network_fee_usd_micros` |
-| Meter | `billable_usd_micros` | SUM of `$.billable_usd_micros` (interim = network fee until phase-2 markup) |
+| Meter | `billable_usd_micros` | SUM of `$.billable_usd_micros` (not emitted by collector until phase-2; meter stays empty until then) |
 | Meter | `signed_ticket_count` | COUNT |
 | Feature | `network_spend` | linked to `network_fee_usd_micros` meter |
 | Feature | `billable_spend` | linked to `billable_usd_micros` meter |
@@ -78,11 +78,11 @@ From [`catalog.json`](catalog.json):
 
 ## Identity contract (important)
 
-The CloudEvent **`subject` is the compound `client_id:usage_subject`** (e.g.
+The CloudEvent **`subject` is the compound `client_id:external_user_id`** (e.g.
 `demo-client:demo-user`), which is also the customer key and its single `subject_key`.
 OpenMeter attributes usage by exact subject match, and **forbids changing a customer's
 `subject_keys` once it has an active subscription** — so the subject must be compound and
-correct from creation. Break usage down per-tenant/user with the `client_id` / `usage_subject`
+correct from creation. Break usage down per-tenant/user with the `client_id` / `external_user_id`
 meter dimensions, not by changing the subject. The scripts therefore never mutate
 `subject_keys` on existing customers; they warn if an existing customer is missing the
 expected compound key.
@@ -98,20 +98,10 @@ expected compound key.
 
 ## Konnect first-time setup
 
-Walkthrough for provisioning against a fresh Konnect org (screenshots from a manual test run):
+Walkthrough for provisioning against a fresh Konnect org:
 
 1. **Create org** — from the org picker, click **+ Create** to provision a clean Metering & Billing workspace.
-
-   ![Create new Konnect org](docs/testing/01-create-org.png)
-
 2. **Name the org** — e.g. *Clearinghouse Example Org*.
-
-   ![Org name in profile menu](docs/testing/02-name-org-pat-nav.png)
-
 3. **Create a Personal Access Token** — Profile menu → **Personal access tokens** → **Generate**. Copy the `kpat_…` token immediately (shown once).
-
-   ![Generate PAT modal](docs/testing/03-generate-pat.png)
-
 4. **Configure `.env`** — copy `openmeter-collector/.env.example` to `openmeter-collector/.env`, set `OPENMETER_API_KEY`, and set `OPENMETER_URL` / `OPENMETER_INGEST_URL` to your org's region (`us` or `eu`).
-
 5. **Run bootstrap** — `cd openmeter-collector/provision && ./bootstrap.sh catalog`. Re-run to confirm idempotency (`exists` / `active` lines, no errors).

@@ -3,8 +3,8 @@
 # Bootstrap the OpenMeter/Konnect metering catalog for the clearinghouse collector.
 #
 # Idempotent: creates only what is missing. Meters are immutable in OpenMeter, so
-# this script never updates or deletes them — it only adds missing meters/features
-# and (for customers) appends missing usage-attribution subject keys.
+# this script never updates or deletes them — it only adds missing meters/features.
+# For customers it never mutates subject_keys on existing records (warns only).
 #
 # Requires: kongctl (https://developer.konghq.com/kongctl/) and jq.
 # Auth:     KONGCTL_DEFAULT_KONNECT_PAT (preferred) or OPENMETER_API_KEY — a Konnect PAT (kpat_…).
@@ -68,56 +68,70 @@ kapi_err() {
   die "kongctl api $method $path failed — check OPENMETER_URL ($OPENMETER_URL) and your PAT: $err"
 }
 
-kapi_check() {
-  local method="$1" path="$2" body="$3"
-  if [ -z "$body" ]; then
-    kapi_err "$method" "$path" "empty response"
-  fi
-  if printf '%s' "$body" | jq -e 'type == "object" and (.message // .detail // .title // empty) != "" and (.data // .items // null) == null' >/dev/null 2>&1; then
-    kapi_err "$method" "$path" "$(printf '%s' "$body" | jq -r '.message // .detail // .title')"
-  fi
+kapi_warn() {
+  local method="$1" path="$2" err="$3"
+  warn "kongctl api $method $path failed — check OPENMETER_URL ($OPENMETER_URL) and your PAT: $err"
 }
 
-kapi_get() {
-  local path="$1" body err
+kapi_body_error() {
+  printf '%s' "$1" | jq -r '.message // .detail // .title // empty'
+}
+
+kapi_body_is_error() {
+  printf '%s' "$1" | jq -e 'type == "object" and (.message // .detail // .title // empty) != "" and (.data // .items // null) == null' >/dev/null 2>&1
+}
+
+kapi_run() {
+  local mode="$1" method="$2" path="$3"
+  shift 3
+  local body err
   err="$(mktemp)"
-  if ! body="$(kongctl api get "$PREFIX$path" --base-url "$BASE" -o json 2>"$err")"; then
-    kapi_err get "$path" "$(cat "$err")"
-  fi
+  case "$method" in
+    get)
+      if ! body="$(kongctl api get "$PREFIX$path" --base-url "$BASE" -o json 2>"$err")"; then
+        if [ "$mode" = soft ]; then kapi_warn get "$path" "$(cat "$err")"; rm -f "$err"; return 1; fi
+        kapi_err get "$path" "$(cat "$err")"
+      fi
+      ;;
+    post)
+      if ! body="$(kongctl api post "$PREFIX$path" --base-url "$BASE" -o json -f - 2>"$err")"; then
+        if [ "$mode" = soft ]; then kapi_warn post "$path" "$(cat "$err")"; rm -f "$err"; return 1; fi
+        kapi_err post "$path" "$(cat "$err")"
+      fi
+      ;;
+    put)
+      if ! body="$(kongctl api put "$PREFIX$path" --base-url "$BASE" -o json -f - 2>"$err")"; then
+        if [ "$mode" = soft ]; then kapi_warn put "$path" "$(cat "$err")"; rm -f "$err"; return 1; fi
+        kapi_err put "$path" "$(cat "$err")"
+      fi
+      ;;
+    delete)
+      if ! body="$(kongctl api delete "$PREFIX$path" --base-url "$BASE" -o json 2>"$err")"; then
+        if [ "$mode" = soft ]; then kapi_warn delete "$path" "$(cat "$err")"; rm -f "$err"; return 1; fi
+        kapi_err delete "$path" "$(cat "$err")"
+      fi
+      ;;
+    *) die "unknown kapi method: $method" ;;
+  esac
   rm -f "$err"
-  kapi_check get "$path" "$body"
+  if [ -z "$body" ]; then
+    if [ "$mode" = soft ]; then kapi_warn "$method" "$path" "empty response"; return 1; fi
+    kapi_err "$method" "$path" "empty response"
+  fi
+  if kapi_body_is_error "$body"; then
+    if [ "$mode" = soft ]; then kapi_warn "$method" "$path" "$(kapi_body_error "$body")"; return 1; fi
+    kapi_err "$method" "$path" "$(kapi_body_error "$body")"
+  fi
   printf '%s' "$body"
 }
-kapi_post() {
-  local path="$1" body err
-  err="$(mktemp)"
-  if ! body="$(kongctl api post "$PREFIX$path" --base-url "$BASE" -o json -f - 2>"$err")"; then
-    kapi_err post "$path" "$(cat "$err")"
-  fi
-  rm -f "$err"
-  kapi_check post "$path" "$body"
-  printf '%s' "$body"
-}
-kapi_put() {
-  local path="$1" body err
-  err="$(mktemp)"
-  if ! body="$(kongctl api put "$PREFIX$path" --base-url "$BASE" -o json -f - 2>"$err")"; then
-    kapi_err put "$path" "$(cat "$err")"
-  fi
-  rm -f "$err"
-  kapi_check put "$path" "$body"
-  printf '%s' "$body"
-}
-kapi_delete() {
-  local path="$1" body err
-  err="$(mktemp)"
-  if ! body="$(kongctl api delete "$PREFIX$path" --base-url "$BASE" -o json 2>"$err")"; then
-    kapi_err delete "$path" "$(cat "$err")"
-  fi
-  rm -f "$err"
-  [ -n "$body" ] && kapi_check delete "$path" "$body" || true
-  printf '%s' "$body"
-}
+
+kapi_get()       { kapi_run hard get    "$1"; }
+kapi_post()      { kapi_run hard post   "$1"; }
+kapi_put()       { kapi_run hard put    "$1"; }
+kapi_delete()    { kapi_run hard delete "$1"; }
+kapi_get_soft()  { kapi_run soft get    "$1"; }
+kapi_post_soft() { kapi_run soft post   "$1"; }
+kapi_delete_soft() { kapi_run soft delete "$1"; }
 
 plan_config_key() { jq -r '.plan.key // .plan_key // empty' "$CATALOG"; }
 
@@ -190,7 +204,7 @@ ensure_features() {
     fi
 
     warn "feature $key — exists without meter link; recreating"
-    kapi_delete "/features/$feat_id" >/dev/null 2>&1 || true
+    kapi_delete_soft "/features/$feat_id" >/dev/null 2>&1 || true
     create_feature "$key" "$(jq -r '.name' <<<"$f")" "$meter_id"
     info "feature $key — recreated (meter: $meter_key)"
   done < <(jq -c '.features[]' "$CATALOG")
@@ -230,9 +244,9 @@ build_plan_body() {
 }
 
 publish_plan() {
-  local plan_id="$1" plan_key="$2"
-  if printf '{}' | kapi_post "/plans/$plan_id/publish" 2>/dev/null \
-    | jq -e '.status == "active"' >/dev/null; then
+  local plan_id="$1" plan_key="$2" resp
+  if resp="$(printf '{}' | kapi_post_soft "/plans/$plan_id/publish")" \
+    && printf '%s' "$resp" | jq -e '.status == "active"' >/dev/null; then
     info "plan    $plan_key — published"
     return 0
   fi
@@ -327,8 +341,8 @@ ensure_subscription() {
   local plan_key; plan_key="$(plan_config_key)"
   [ -n "$plan_key" ] || { warn "no plan_key in catalog; skipping subscription"; return 0; }
 
-  local existing
-  existing="$(kapi_get "/subscriptions?customer_id=$customer_id" 2>/dev/null \
+  local existing resp
+  existing="$(kapi_get_soft "/subscriptions?customer_id=$customer_id" 2>/dev/null \
     | jq -r --arg c "$customer_id" '(.data // .)[]? | select(.customer_id == $c) | .id' 2>/dev/null || true)"
   if [ -n "$existing" ]; then
     info "sub      $label — exists"
@@ -338,7 +352,7 @@ ensure_subscription() {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   body="$(jq -n --arg c "$customer_id" --arg p "$plan_key" --arg t "$now" \
     '{customer_id:$c, plan_key:$p, active_from:$t}')"
-  if printf '%s' "$body" | kapi_post /subscriptions >/dev/null 2>&1; then
+  if resp="$(printf '%s' "$body" | kapi_post_soft /subscriptions)" && [ -n "$resp" ]; then
     info "sub      $label — created on $plan_key"
   else
     warn "sub      $label — could not create subscription on $plan_key (create manually if needed)"

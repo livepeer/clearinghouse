@@ -10,7 +10,6 @@
       "value_property": "$.network_fee_usd_micros",
       "dimensions": {
         "client_id": "$.client_id",
-        "usage_subject": "$.usage_subject",
         "external_user_id": "$.external_user_id",
         "model_id": "$.model_id",
         "pipeline": "$.pipeline"
@@ -19,13 +18,12 @@
     {
       "key": "billable_usd_micros",
       "name": "Billable usage (USD micros)",
-      "description": "Post-markup billable amount in USD micros for pay-per-use billing. Interim: equals network fee until phase-2 markup is applied.",
+      "description": "Post-markup billable amount in USD micros for pay-per-use billing. Not emitted by the collector until phase-2 markup; meter stays empty until then.",
       "event_type": "create_signed_ticket",
       "aggregation": "sum",
       "value_property": "$.billable_usd_micros",
       "dimensions": {
         "client_id": "$.client_id",
-        "usage_subject": "$.usage_subject",
         "external_user_id": "$.external_user_id",
         "model_id": "$.model_id",
         "pipeline": "$.pipeline"
@@ -39,7 +37,7 @@
       "aggregation": "count",
       "dimensions": {
         "client_id": "$.client_id",
-        "usage_subject": "$.usage_subject",
+        "external_user_id": "$.external_user_id",
         "model_id": "$.model_id",
         "pipeline": "$.pipeline"
       }

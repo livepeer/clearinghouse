@@ -60,7 +60,7 @@ if (-not $pat) { Die "no Konnect PAT — set KONGCTL_DEFAULT_KONNECT_PAT or OPEN
 $env:KONGCTL_DEFAULT_KONNECT_PAT = $pat
 
 if (-not $env:OPENMETER_URL -and $env:OPENMETER_INGEST_URL) {
-  $env:OPENMETER_URL = $env:OPENMETER_INGEST_URL.TrimEnd('/').Replace('/events', '')
+  $env:OPENMETER_URL = ($env:OPENMETER_INGEST_URL.TrimEnd('/') -replace '/events/?$', '')
 }
 $omUrl = if ($env:OPENMETER_URL) { $env:OPENMETER_URL } else { 'https://us.api.konghq.com/v3/openmeter' }
 $omUrl = $omUrl.TrimEnd('/')
@@ -74,46 +74,56 @@ $catalogObj = Get-Content -Raw $Catalog | ConvertFrom-Json
 function Kapi-Err($method, $path, $detail) {
   Die "kongctl api $method $path failed — check OPENMETER_URL ($omUrl) and your PAT: $detail"
 }
-function Kapi-Check($method, $path, $obj) {
-  if ($null -eq $obj) { Kapi-Err $method $path 'empty response' }
-  $msg = $obj.message
-  if (-not $msg) { $msg = $obj.detail }
-  if (-not $msg) { $msg = $obj.title }
+function Kapi-Warn($method, $path, $detail) {
+  Warn "kongctl api $method $path failed — check OPENMETER_URL ($omUrl) and your PAT: $detail"
+}
+function Kapi-BodyError($obj) {
+  if ($obj.message) { return $obj.message }
+  if ($obj.detail) { return $obj.detail }
+  return $obj.title
+}
+function Kapi-BodyIsError($obj) {
+  if ($null -eq $obj) { return $true }
+  $msg = Kapi-BodyError $obj
+  if (-not $msg) { return $false }
   $hasData = $obj.PSObject.Properties.Name -contains 'data' -or $obj.PSObject.Properties.Name -contains 'items'
-  if ($msg -and -not $hasData) { Kapi-Err $method $path $msg }
+  return -not $hasData
 }
-function Kapi-Get($path) {
+function Kapi-Run($soft, $method, $path, $bodyJson) {
   $errFile = [System.IO.Path]::GetTempFileName()
   try {
-    $out = & kongctl api get "$PREFIX$path" --base-url $BASE -o json 2>$errFile
-    if ($LASTEXITCODE -ne 0) { Kapi-Err get $path (Get-Content -Raw $errFile) }
-    if (-not $out) { Kapi-Err get $path 'empty response' }
+    $out = if ($method -eq 'delete') {
+      & kongctl api delete "$PREFIX$path" --base-url $BASE -o json 2>$errFile
+    }
+    elseif ($method -eq 'get') {
+      & kongctl api get "$PREFIX$path" --base-url $BASE -o json 2>$errFile
+    }
+    else {
+      $bodyJson | & kongctl api $method "$PREFIX$path" --base-url $BASE -o json -f - 2>$errFile
+    }
+    if ($LASTEXITCODE -ne 0) {
+      if ($soft) { Kapi-Warn $method $path (Get-Content -Raw $errFile); return $null }
+      Kapi-Err $method $path (Get-Content -Raw $errFile)
+    }
+    if (-not $out) {
+      if ($soft) { Kapi-Warn $method $path 'empty response'; return $null }
+      Kapi-Err $method $path 'empty response'
+    }
     $obj = $out | ConvertFrom-Json
-    Kapi-Check get $path $obj
+    if (Kapi-BodyIsError $obj) {
+      if ($soft) { Kapi-Warn $method $path (Kapi-BodyError $obj); return $null }
+      Kapi-Err $method $path (Kapi-BodyError $obj)
+    }
     return $obj
   }
   finally { Remove-Item -Force $errFile -ErrorAction SilentlyContinue }
 }
-function Kapi-Send($method, $path, $bodyJson) {
-  $errFile = [System.IO.Path]::GetTempFileName()
-  try {
-    $out = $bodyJson | & kongctl api $method "$PREFIX$path" --base-url $BASE -o json -f - 2>$errFile
-    if ($LASTEXITCODE -ne 0) { Kapi-Err $method $path (Get-Content -Raw $errFile) }
-    if (-not $out) { return $null }
-    $obj = $out | ConvertFrom-Json
-    Kapi-Check $method $path $obj
-    return $obj
-  }
-  finally { Remove-Item -Force $errFile -ErrorAction SilentlyContinue }
-}
-function Kapi-Delete($path) {
-  $errFile = [System.IO.Path]::GetTempFileName()
-  try {
-    & kongctl api delete "$PREFIX$path" --base-url $BASE -o json 2>$errFile | Out-Null
-    if ($LASTEXITCODE -ne 0) { Kapi-Err delete $path (Get-Content -Raw $errFile) }
-  }
-  finally { Remove-Item -Force $errFile -ErrorAction SilentlyContinue }
-}
+function Kapi-Get($path) { return Kapi-Run $false get $path $null }
+function Kapi-Send($method, $path, $bodyJson) { return Kapi-Run $false $method $path $bodyJson }
+function Kapi-Delete($path) { Kapi-Run $false delete $path $null | Out-Null }
+function Kapi-Get-Soft($path) { return Kapi-Run $true get $path $null }
+function Kapi-Send-Soft($method, $path, $bodyJson) { return Kapi-Run $true $method $path $bodyJson }
+function Kapi-Delete-Soft($path) { Kapi-Run $true delete $path $null | Out-Null }
 function Plan-ConfigKey {
   if ($catalogObj.plan -and $catalogObj.plan.key) { return $catalogObj.plan.key }
   return $catalogObj.plan_key
@@ -173,7 +183,7 @@ function Ensure-Features {
     if ($linked -eq $meterId) { Info "feature $($f.key) - exists"; continue }
 
     Warn "feature $($f.key) - exists without meter link; recreating"
-    try { Kapi-Delete "/features/$($feat.id)" } catch { }
+    Kapi-Delete-Soft "/features/$($feat.id)"
     Kapi-Send 'post' '/features' (New-FeatureBody $f.key $f.name $meterId) | Out-Null
     Info "feature $($f.key) - recreated (meter: $meterKey)"
   }
@@ -207,14 +217,11 @@ function Build-PlanBody {
   return ($body | ConvertTo-Json -Depth 8 -Compress)
 }
 function Publish-Plan($planId, $planKey) {
-  try {
-    $published = Kapi-Send 'post' "/plans/$planId/publish" '{}'
-    if ($published.status -eq 'active') {
-      Info "plan    $planKey - published"
-      return $true
-    }
+  $published = Kapi-Send-Soft 'post' "/plans/$planId/publish" '{}'
+  if ($published -and $published.status -eq 'active') {
+    Info "plan    $planKey - published"
+    return $true
   }
-  catch { }
   Warn "plan    $planKey - could not publish (ensure features have meter links)"
   return $false
 }
@@ -278,15 +285,17 @@ function Ensure-Customer($clientId, $externalUserId, $display, $subscribe) {
 function Ensure-Subscription($customerId, $label) {
   $planKey = Plan-ConfigKey
   if (-not $planKey) { Warn 'no plan_key in catalog; skipping subscription'; return }
-  $existing = Items (Kapi-Get "/subscriptions?customer_id=$customerId") | Where-Object { $_.customer_id -eq $customerId }
+  $existing = Items (Kapi-Get-Soft "/subscriptions?customer_id=$customerId") | Where-Object { $_.customer_id -eq $customerId }
   if ($existing) { Info "sub      $label - exists"; return }
   $now = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
   $body = [ordered]@{ customer_id = $customerId; plan_key = $planKey; active_from = $now }
-  try {
-    Kapi-Send 'post' '/subscriptions' ($body | ConvertTo-Json -Compress) | Out-Null
+  $created = Kapi-Send-Soft 'post' '/subscriptions' ($body | ConvertTo-Json -Compress)
+  if ($created) {
     Info "sub      $label - created on $planKey"
   }
-  catch { Warn "sub      $label - could not create subscription on $planKey (create manually if needed)" }
+  else {
+    Warn "sub      $label - could not create subscription on $planKey (create manually if needed)"
+  }
 }
 
 # --- dispatch --------------------------------------------------------------
