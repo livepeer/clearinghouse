@@ -1,7 +1,4 @@
-kafka/.env
-remote-signer/.env
-openmeter-collector/.env
-identity-webhook/.env
+.env
 remote-signer/data/
 node_modules/
 

@@ -31,7 +31,7 @@ Signer HTTP request
 
 **CLI port not exposed.** go-livepeer's `-cliAddr` (admin/RPC) is bound to `127.0.0.1:4935` inside the container and is never published or mapped to the host. Only the signing HTTP port (`8081`) is exposed.
 
-**Per-service configuration.** Each service has a local `.env` file (copy from `.env.example` before starting). Kafka, remote-signer, and openmeter-collector mount theirs at `/service/.env` and source it in the entrypoint. identity-webhook reads its `.env` via Compose `env_file`.
+**Stack configuration.** Copy [`.env.example`](.env.example) to `.env` at the repo root before starting. All Compose services read from that file — kafka, remote-signer, and openmeter-collector mount it at `/service/.env` and source it in the entrypoint; identity-webhook reads it via Compose `env_file`.
 
 ## Local stack
 
@@ -40,11 +40,8 @@ Signer HTTP request
 Start here before wiring metering. This runs the broker, identity webhook, and remote signer.
 
 ```bash
-cp kafka/.env.example kafka/.env
-cp identity-webhook/.env.example identity-webhook/.env
-cp remote-signer/.env.example remote-signer/.env
-$EDITOR identity-webhook/.env remote-signer/.env
-# WEBHOOK_SECRET must match in both files (`.env.example` ships a local dev value).
+cp .env.example .env
+$EDITOR .env
 # For a local alive check without an identity webhook:
 #   REMOTE_SIGNER_WEBHOOK_URL=
 #   WEBHOOK_SECRET=
@@ -77,27 +74,44 @@ docker compose port remote-signer 8081
 
 ### 2. Full stack — add metering
 
-After the quick check passes, add the OpenMeter collector and hosted metering configuration. Provision OpenMeter meters/features (see [OpenMeter/Konnect bootstrap](#openmeterkonnect-bootstrap)), then configure the collector:
+After the quick check passes, add the OpenMeter collector and hosted metering configuration. Provision OpenMeter meters/features (see [OpenMeter/Konnect bootstrap](#openmeterkonnect-bootstrap)), then set `OPENMETER_API_KEY` in `.env`:
 
 ```bash
-cp openmeter-collector/.env.example openmeter-collector/.env
-$EDITOR openmeter-collector/.env
+$EDITOR .env
 
 docker compose up -d --build
 docker compose logs -f
 docker compose down
 ```
 
+Smoketest — produce a signed-ticket event; the collector forwards it to OpenMeter/Konnect:
+
+```bash
+docker compose exec -T kafka rpk topic create livepeer-gateway-events
+# gateway topic (broker auto-create is off)
+
+echo '{"type":"create_signed_ticket","data":{"auth_id":"demo-client:demo-user","computed_fee":"1000000000000000","request_id":"clearinghouse-smoketest","pipeline":"live-video-to-video","pixels":"1000"}}' \
+  | docker compose exec -T kafka rpk topic produce livepeer-gateway-events
+# collector consumes it, converts the fee, POSTs to OpenMeter/Konnect
+
+docker compose logs --tail=20 openmeter-collector
+# no ERROR = forwarded to OpenMeter
+```
+
+Re-runs are dedup-safe (OpenMeter deduplicates by event id). A real signer-emitted event needs a full gateway or [local SDK](https://github.com/livepeer/livepeer-python-gateway) to call a real job with a funded signer — out of scope here.
+
 ## Environment variables
 
-Each service documents its variables in its own `.env.example`:
+All variables are documented in [`.env.example`](.env.example), grouped by service:
 
-| Service | Config file | Key variables |
-| --- | --- | --- |
-| `identity-webhook` | [`identity-webhook/.env.example`](identity-webhook/.env.example) | `WEBHOOK_SECRET`, `IDENTITY_ISSUER`, `DEMO_API_KEY`, `DEMO_CLIENT_ID`, `DEMO_USER_ID`, `API_KEY_PREFIX` (optional, default `sk_`) |
-| `kafka` | [`kafka/.env.example`](kafka/.env.example) | `KAFKA_ADVERTISED_ADDR` |
-| `remote-signer` | [`remote-signer/.env.example`](remote-signer/.env.example) | `REMOTE_SIGNER_WEBHOOK_URL`, `WEBHOOK_SECRET`, `SIGNER_*`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC` |
-| `openmeter-collector` | [`openmeter-collector/.env.example`](openmeter-collector/.env.example) | `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`, `OPENMETER_INGEST_URL`, `OPENMETER_API_KEY`, `PRICE_ORACLE_URL`, `PRICE_ORACLE_REFRESH` |
+| Service | Key variables |
+| --- | --- |
+| `identity-webhook` | `WEBHOOK_SECRET`, `IDENTITY_ISSUER`, `DEMO_API_KEY`, `DEMO_CLIENT_ID`, `DEMO_USER_ID`, `API_KEY_PREFIX` (optional, default `sk_`), `OIDC_*` (optional) |
+| `kafka` | `KAFKA_ADVERTISED_ADDR` |
+| `remote-signer` | `REMOTE_SIGNER_WEBHOOK_URL`, `WEBHOOK_SECRET`, `SIGNER_*`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC` |
+| `openmeter-collector` | `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`, `OPENMETER_INGEST_URL`, `OPENMETER_API_KEY`, `PRICE_ORACLE_URL`, `PRICE_ORACLE_REFRESH` |
+
+Shared keys (`WEBHOOK_SECRET`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`) are listed once at the top of `.env.example`.
 
 Signer state (keystore, `.eth-password`, chain DB) is stored under [`remote-signer/data/`](remote-signer/data/), bind-mounted to `/data` in the container.
 
@@ -106,8 +120,7 @@ mkdir -p remote-signer/data/keystore
 cp /path/to/your/keystore/* remote-signer/data/keystore/
 cp /path/to/your/.eth-password remote-signer/data/.eth-password
 
-cp remote-signer/.env.example remote-signer/.env
-$EDITOR remote-signer/.env
+$EDITOR .env
 ```
 
 Set `SIGNER_ETH_KEYSTORE_PATH=/data/keystore` (container path) and `SIGNER_ETH_ADDR` to your funded signer address. If `SIGNER_ETH_KEYSTORE_PATH` is unset, the entrypoint uses `/data/keystore` when that directory exists.
@@ -159,4 +172,4 @@ The collector parses `auth_id` once (first-colon split) and emits normalized Clo
 - `data.usage_subject` = end user
 - `data.auth_id` retained for compatibility; `data.external_user_id` mirrors `usage_subject` for meter `groupBy`
 
-Demo API key defaults: `sk_demo_local_key` → `demo-client:demo-user` (configured in `identity-webhook/.env`).
+Demo API key defaults: `sk_demo_local_key` → `demo-client:demo-user` (configured in `.env`).

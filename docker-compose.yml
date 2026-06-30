@@ -4,7 +4,7 @@
 # only its signing HTTP port (8081) is published to the host. The CLI/admin port (-cliAddr)
 # is bound to loopback inside the container and is never exposed or published.
 #
-# Per-service config: copy each service's .env.example to .env before starting.
+# Stack config: copy .env.example to .env at the repo root before starting.
 #
 # Full stack:
 #   docker compose up -d --build
@@ -19,7 +19,7 @@ services:
       dockerfile: identity-webhook/Dockerfile
     restart: unless-stopped
     env_file:
-      - ./identity-webhook/.env
+      - ./.env
     environment:
       PORT: "8090"
     healthcheck:
@@ -35,7 +35,7 @@ services:
       dockerfile: kafka/Dockerfile
     restart: unless-stopped
     volumes:
-      - ./kafka/.env:/service/.env:ro
+      - ./.env:/service/.env:ro
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy'"]
       interval: 10s
@@ -58,7 +58,7 @@ services:
     ports:
       - "8081:8081"
     volumes:
-      - ./remote-signer/.env:/service/.env:ro
+      - ./.env:/service/.env:ro
       - ./remote-signer/data:/data
 
   openmeter-collector:
@@ -70,7 +70,7 @@ services:
       kafka:
         condition: service_healthy
     volumes:
-      - ./openmeter-collector/.env:/service/.env:ro
+      - ./.env:/service/.env:ro
 
 # Signer datadir is bind-mounted from remote-signer/data.
 # Copy keystore + .eth-password into remote-signer/data before first run.
