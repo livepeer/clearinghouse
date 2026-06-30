@@ -1,8 +1,12 @@
 # Clearinghouse stack: identity webhook + Redpanda + remote signer + OpenMeter collector.
 #
 # Redpanda is the Kafka-compatible broker. The signer container runs go-livepeer directly —
-# only its signing HTTP port (8081) is published to the host. The CLI/admin port (-cliAddr)
-# is bound to loopback inside the container and is never exposed or published.
+# only its signing HTTP port (8081) is published to the host on loopback (127.0.0.1).
+# The CLI/admin port (-cliAddr) is bound to loopback inside the container and is never
+# published. To expose the signing port on all interfaces, add a Compose override:
+#   services.remote-signer.ports: ["8081:8081"]
+# Only do this when REMOTE_SIGNER_WEBHOOK_URL is set — an unauthenticated signer on the
+# LAN can drain deposits.
 #
 # Stack config: copy .env.example to .env at the repo root before starting.
 #
@@ -56,7 +60,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     volumes:
       - ./.env:/service/.env:ro
       - ./remote-signer/data:/data

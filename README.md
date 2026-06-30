@@ -29,7 +29,19 @@ Signer HTTP request
 
 **Identity & auth.** The in-compose **identity-webhook** is self-contained: it implements go-livepeer's remote-signer webhook wire protocol in-repo (`identity-webhook/protocol.mjs`) and pluggable end-user verifiers (`identity-webhook/verifiers.mjs`) — an API-key verifier and an OAuth/OIDC verifier built on [`jose`](https://github.com/panva/jose). The signer container runs `go-livepeer` directly; every signing request is authorized by go-livepeer's `-remoteSignerWebhookUrl` hook, which calls `/authorize` with `Authorization: Bearer <WEBHOOK_SECRET>`. End users present their credential to the signer — `Authorization: Bearer sk_…` (API key) or `Authorization: Bearer <jwt>` (OIDC) — and the webhook resolves it to `auth_id = "{client_id}:{usage_subject}"`. Set `OIDC_ISSUER`/`OIDC_AUDIENCE` to enable bring-your-own-OAuth (JWTs verified against your IdP's JWKS); configure both API keys and OIDC to accept either. For local alive checks only, leave `REMOTE_SIGNER_WEBHOOK_URL` empty to omit the webhook hook.
 
-**CLI port not exposed.** go-livepeer's `-cliAddr` (admin/RPC) is bound to `127.0.0.1:4935` inside the container and is never published or mapped to the host. Only the signing HTTP port (`8081`) is exposed.
+**CLI port not exposed.** go-livepeer's `-cliAddr` (admin/RPC) is bound to `127.0.0.1:4935` inside the container and is never published or mapped to the host.
+
+**Signing port loopback-only by default.** Compose publishes the signing HTTP port as `127.0.0.1:8081` so an accidentally unauthenticated signer (when `REMOTE_SIGNER_WEBHOOK_URL` is empty) is not reachable from the LAN. To expose on all interfaces — e.g. for a gateway on another host — add a Compose override:
+
+```yaml
+# docker-compose.override.yml
+services:
+  remote-signer:
+    ports:
+      - "8081:8081"
+```
+
+Only bind `0.0.0.0` when `REMOTE_SIGNER_WEBHOOK_URL` and `WEBHOOK_SECRET` are set; an open signer can drain deposits.
 
 **Stack configuration.** Copy [`.env.example`](.env.example) to `.env` at the repo root before starting. All Compose services read from that file — kafka, remote-signer, and openmeter-collector mount it at `/service/.env` and source it in the entrypoint; identity-webhook reads it via Compose `env_file`.
 
@@ -63,13 +75,23 @@ docker compose exec identity-webhook \
 
 Expected result: `remote-signer` starts cleanly, connects to Kafka, and serves the signing HTTP port.
 
+Smoketests:
+
+```bash
+docker compose ps
+# kafka "healthy", identity-webhook "healthy" (signer waits for both), remote-signer "Up"
+
+curl -fsS -X POST http://localhost:8081/sign-orchestrator-info
+# {"address":"0x…","signature":"0x…"} — keystore unlocked, signer can sign
+```
+
 Verify CLI port is not published:
 
 ```bash
 docker compose port remote-signer 4935
 # expected: no output / error (port is not mapped)
 docker compose port remote-signer 8081
-# expected: 0.0.0.0:8081
+# expected: 127.0.0.1:8081
 ```
 
 ### 2. Full stack — add metering
@@ -125,7 +147,7 @@ $EDITOR .env
 
 Set `SIGNER_ETH_KEYSTORE_PATH=/data/keystore` (container path) and `SIGNER_ETH_ADDR` to your funded signer address. If `SIGNER_ETH_KEYSTORE_PATH` is unset, the entrypoint uses `/data/keystore` when that directory exists.
 
-To change the host signing port from `8081`, use a Compose override file.
+To change the host signing port or bind on all interfaces, use a Compose override file (see **Signing port loopback-only by default** under Design decisions).
 
 ## OpenMeter/Konnect bootstrap
 
