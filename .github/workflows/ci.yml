@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  pull_request:
+    paths:
+      - "identity-webhook/**"
+      - ".github/workflows/ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "identity-webhook/**"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  identity-webhook:
+    name: identity-webhook
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: identity-webhook
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: identity-webhook/package-lock.json
+      - run: npm ci
+      - run: npm test
