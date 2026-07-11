@@ -164,6 +164,71 @@ describe("handleAuthorize", () => {
   });
 });
 
+describe("handleAuthorize checkBalance hook", () => {
+  const goodBody = { headers: { Authorization: ["Bearer good-token"] } };
+
+  it("rejects with 483 when checkBalance throws insufficient_balance", async () => {
+    const checkBalance = async () => {
+      throw new WebhookError("insufficient balance", {
+        status: 483,
+        code: "insufficient_balance",
+      });
+    };
+    const res = await handleAuthorize(authorizeRequest({ body: goodBody }), {
+      ...config,
+      checkBalance,
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), {
+      status: 483,
+      reason: "insufficient balance",
+      code: "insufficient_balance",
+    });
+  });
+
+  it("passes identity and original expiry into checkBalance", async () => {
+    let seen;
+    const checkBalance = async (ctx) => {
+      seen = ctx;
+    };
+    const res = await handleAuthorize(authorizeRequest({ body: goodBody }), {
+      ...config,
+      checkBalance,
+    });
+    assert.equal(res.status, 200);
+    assert.equal(seen.identity.auth_id, undefined); // ctx carries identity, not auth_id
+    assert.equal(seen.identity.client_id, "tenant-a");
+    assert.equal(seen.identity.usage_subject, "user-1");
+    assert.equal(seen.expiry, 1234567890);
+  });
+
+  it("caps the returned expiry when checkBalance shortens it", async () => {
+    const checkBalance = async () => ({ expiry: 100 });
+    const res = await handleAuthorize(authorizeRequest({ body: goodBody }), {
+      ...config,
+      checkBalance,
+    });
+    assert.equal((await res.json()).expiry, 100);
+  });
+
+  it("never extends the verifier expiry", async () => {
+    const checkBalance = async () => ({ expiry: 9999999999 });
+    const res = await handleAuthorize(authorizeRequest({ body: goodBody }), {
+      ...config,
+      checkBalance,
+    });
+    assert.equal((await res.json()).expiry, 1234567890);
+  });
+
+  it("allows the request when checkBalance returns nothing", async () => {
+    const res = await handleAuthorize(authorizeRequest({ body: goodBody }), {
+      ...config,
+      checkBalance: async () => undefined,
+    });
+    assert.equal((await res.json()).status, 200);
+  });
+});
+
 describe("routeWebhookRequest", () => {
   it("routes POST /authorize", async () => {
     const res = await routeWebhookRequest(
