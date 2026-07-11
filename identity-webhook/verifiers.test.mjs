@@ -6,6 +6,8 @@ import {
   createEndUserVerifierFromEnv,
   createOidcVerifier,
   discoverJwksUri,
+  normalizeTokenExchangeBaseUrl,
+  splitCompositeApiKey,
 } from "./verifiers.mjs";
 
 const ISSUER = "http://identity-webhook:8090";
@@ -16,16 +18,16 @@ describe("discoverJwksUri", () => {
     const fetchImpl = async (input) => {
       seen.push(String(input));
       return Response.json({
-        issuer: "https://staging.pymthouse.com/api/v1/oidc",
-        jwks_uri: "https://staging.pymthouse.com/api/v1/oidc/jwks",
+        issuer: "https://issuer.example/api/v1/oidc",
+        jwks_uri: "https://issuer.example/api/v1/oidc/jwks",
       });
     };
-    const uri = await discoverJwksUri("https://staging.pymthouse.com/api/v1/oidc", {
+    const uri = await discoverJwksUri("https://issuer.example/api/v1/oidc", {
       fetchImpl,
     });
-    assert.equal(uri, "https://staging.pymthouse.com/api/v1/oidc/jwks");
+    assert.equal(uri, "https://issuer.example/api/v1/oidc/jwks");
     assert.deepEqual(seen, [
-      "https://staging.pymthouse.com/api/v1/oidc/.well-known/openid-configuration",
+      "https://issuer.example/api/v1/oidc/.well-known/openid-configuration",
     ]);
   });
 
@@ -312,18 +314,151 @@ describe("createEndUserVerifierFromEnv", () => {
     );
   });
 
-  it("oidc mode does not accept sk_ API keys", async () => {
+  it("oidc mode rejects bare secrets and non-composite tokens", async () => {
     const verifier = createEndUserVerifierFromEnv({
       IDENTITY_ISSUER: ISSUER,
       IDENTITY_AUTH_MODE: "oidc",
       OIDC_ISSUER: "https://idp.test/",
       OIDC_AUDIENCE: "clearinghouse",
+      OIDC_TOKEN_EXCHANGE_BASE_URL: "https://billing.test",
     });
 
     assert.equal(verifier.kind, "oidc");
     await assert.rejects(
       () => verifier.verify({ authorization: "Bearer sk_demo" }),
       /not a JWT/,
+    );
+    await assert.rejects(
+      () => verifier.verify({ authorization: "Bearer deadbeefsecret" }),
+      /not a JWT/,
+    );
+    await assert.rejects(
+      () =>
+        verifier.verify({
+          authorization: "Bearer app_3b386c81a1db1169fd2c3986_cs_secret",
+        }),
+      /not a JWT/,
+    );
+  });
+});
+
+describe("splitCompositeApiKey / normalizeTokenExchangeBaseUrl", () => {
+  const clientId = "app_3b386c81a1db1169fd2c3986";
+
+  it("parses composite credentials", () => {
+    assert.deepEqual(splitCompositeApiKey(`${clientId}_deadbeef`), {
+      publicClientId: clientId,
+      apiKey: "deadbeef",
+    });
+    assert.deepEqual(splitCompositeApiKey(`${clientId}_key_deadbeef`), {
+      publicClientId: clientId,
+      apiKey: "key_deadbeef",
+    });
+    assert.equal(splitCompositeApiKey("deadbeef"), null);
+    assert.equal(splitCompositeApiKey(`${clientId}.deadbeef`), null);
+    assert.equal(splitCompositeApiKey(`${clientId}_cs_secret`), null);
+    assert.equal(splitCompositeApiKey("app_abc_short"), null);
+  });
+
+  it("requires https except loopback", () => {
+    assert.equal(
+      normalizeTokenExchangeBaseUrl("https://billing.example.com/"),
+      "https://billing.example.com",
+    );
+    assert.equal(
+      normalizeTokenExchangeBaseUrl("http://localhost:3000"),
+      "http://localhost:3000",
+    );
+    assert.throws(
+      () => normalizeTokenExchangeBaseUrl("http://billing.example.com"),
+      /must be https/,
+    );
+  });
+});
+
+describe("createOidcVerifier composite API key exchange", () => {
+  async function setup() {
+    const { publicKey, privateKey } = await generateKeyPair("RS256");
+    const jwk = await exportJWK(publicKey);
+    jwk.kid = "test-key";
+    jwk.alg = "RS256";
+    jwk.use = "sig";
+    const jwks = createLocalJWKSet({ keys: [jwk] });
+    return { privateKey, jwks };
+  }
+
+  it("exchanges app_*_* then verifies the minted JWT", async () => {
+    const { privateKey, jwks } = await setup();
+    const issuer = "https://idp.test/api/v1/oidc";
+    const audience = issuer;
+    const clientId = "app_3b386c81a1db1169fd2c3986";
+    const composite = `${clientId}_deadbeef`;
+    const minted = await new SignJWT({
+      client_id: clientId,
+      external_user_id: "user-1",
+      scope: "sign:job",
+    })
+      .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+      .setIssuer(issuer)
+      .setAudience(audience)
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(privateKey);
+
+    const seen = [];
+    const fetchImpl = async (input, init) => {
+      const url = String(input);
+      seen.push({ url, method: init?.method, body: init?.body });
+      assert.equal(url, `https://billing.test/api/v1/apps/${clientId}/oidc/token`);
+      assert.equal(init?.method, "POST");
+      const form = new URLSearchParams(String(init?.body ?? ""));
+      assert.equal(form.get("subject_token"), "deadbeef");
+      assert.equal(
+        form.get("grant_type"),
+        "urn:ietf:params:oauth:grant-type:token-exchange",
+      );
+      return Response.json({ access_token: minted, expires_in: 300 });
+    };
+
+    const verifier = createOidcVerifier({
+      jwtIssuer: issuer,
+      jwtAudience: audience,
+      jwks,
+      clientClaim: "client_id",
+      subjectClaim: "external_user_id",
+      subjectTypeValue: "external_user_id",
+      requiredScopes: ["sign:job"],
+      tokenExchangeBaseUrl: "https://billing.test",
+      fetchImpl,
+    });
+
+    const { identity } = await verifier.verify({
+      authorization: `Bearer ${composite}`,
+    });
+    assert.equal(identity.client_id, clientId);
+    assert.equal(identity.usage_subject, "user-1");
+    assert.equal(seen.length, 1);
+
+    // Second call hits cache — no extra exchange.
+    await verifier.verify({ authorization: `Bearer ${composite}` });
+    assert.equal(seen.length, 1);
+  });
+
+  it("rejects when exchange returns 401", async () => {
+    const { jwks } = await setup();
+    const clientId = "app_3b386c81a1db1169fd2c3986";
+    const fetchImpl = async () =>
+      Response.json({ error: "invalid_grant", correlation_id: "c1" }, { status: 401 });
+    const verifier = createOidcVerifier({
+      jwtIssuer: "https://idp.test/",
+      jwtAudience: "clearinghouse",
+      jwks,
+      tokenExchangeBaseUrl: "https://billing.test",
+      fetchImpl,
+    });
+    await assert.rejects(
+      () => verifier.verify({ authorization: `Bearer ${clientId}_bad` }),
+      /token exchange failed/,
     );
   });
 });
