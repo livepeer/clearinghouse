@@ -49,6 +49,10 @@ func unsupportedTokenType(description string) *Error {
 	return newError("unsupported_token_type", description, description, 400)
 }
 
+func insufficientAllowance(description string) *Error {
+	return newError("insufficient_allowance", description, description, 402)
+}
+
 func serverError(description string) *Error {
 	return newError("server_error", description, description, 500)
 }

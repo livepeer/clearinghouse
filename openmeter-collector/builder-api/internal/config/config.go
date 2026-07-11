@@ -21,6 +21,11 @@ type Config struct {
 	OpenMeterURL      string
 	OpenMeterAPIKey   string
 	OpenMeterDefaultPlanKey string
+	KonnectCredentialsURL string
+	PlatformAPISecret     string
+	OpenMeterTrialFeatureKey     string
+	OpenMeterTrialGrantUSDMicros int64
+	OpenMeterEnforceAllowance    bool
 	SignerURL         string
 	DiscoveryURL      string
 	APIKeyPrefix      string
@@ -46,6 +51,10 @@ func Load() (Config, error) {
 		OpenMeterURL:      envOr("OPENMETER_URL", "https://us.api.konghq.com/v3/openmeter"),
 		OpenMeterAPIKey:   strings.TrimSpace(os.Getenv("OPENMETER_API_KEY")),
 		OpenMeterDefaultPlanKey: envOr("OPENMETER_DEFAULT_PLAN_KEY", "clearinghouse_default_ppu"),
+		KonnectCredentialsURL: strings.TrimSpace(os.Getenv("KONNECT_CREDENTIALS_URL")),
+		PlatformAPISecret:     strings.TrimSpace(os.Getenv("PLATFORM_API_SECRET")),
+		OpenMeterTrialFeatureKey: envOr("OPENMETER_TRIAL_FEATURE_KEY", "billable_spend"),
+		OpenMeterEnforceAllowance: envBool("OPENMETER_ENFORCE_ALLOWANCE", true),
 		SignerURL: strings.TrimSpace(os.Getenv("SIGNER_URL")),
 		DiscoveryURL: envOr(
 			"DISCOVERY_URL",
@@ -55,6 +64,14 @@ func Load() (Config, error) {
 		DemoAPIKeys:        strings.TrimSpace(os.Getenv("DEMO_API_KEYS")),
 		IdentityWebhookURL: firstEnv("IDENTITY_WEBHOOK_URL", "REMOTE_SIGNER_WEBHOOK_URL"),
 		WebhookSecret:      strings.TrimSpace(os.Getenv("WEBHOOK_SECRET")),
+	}
+
+	if v := strings.TrimSpace(os.Getenv("OPENMETER_TRIAL_GRANT_USD_MICROS")); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return cfg, fmt.Errorf("OPENMETER_TRIAL_GRANT_USD_MICROS must be an integer: %w", err)
+		}
+		cfg.OpenMeterTrialGrantUSDMicros = n
 	}
 
 	if cfg.Auth0Issuer == "" && cfg.Auth0Domain != "" {
@@ -78,8 +95,11 @@ func Load() (Config, error) {
 	if cfg.SignerM2MSecret == "" {
 		missing = append(missing, "AUTH0_SIGNER_M2M_CLIENT_SECRET")
 	}
-	if cfg.OpenMeterAPIKey == "" {
-		missing = append(missing, "OPENMETER_API_KEY")
+	if cfg.KonnectCredentialsURL == "" && cfg.OpenMeterAPIKey == "" {
+		missing = append(missing, "OPENMETER_API_KEY or KONNECT_CREDENTIALS_URL")
+	}
+	if cfg.KonnectCredentialsURL != "" && cfg.PlatformAPISecret == "" {
+		missing = append(missing, "PLATFORM_API_SECRET")
 	}
 	if len(missing) > 0 {
 		return cfg, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
@@ -108,3 +128,17 @@ func firstEnv(keys ...string) string {
 	return ""
 }
 
+func envBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}

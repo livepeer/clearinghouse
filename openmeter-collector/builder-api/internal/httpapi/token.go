@@ -11,14 +11,16 @@ import (
 )
 
 type tokenExchangeResponse struct {
-	AccessToken     string `json:"access_token"`
-	TokenType       string `json:"token_type"`
-	ExpiresIn       int    `json:"expires_in"`
-	Scope           string `json:"scope"`
-	SignerURL       string `json:"signer_url,omitempty"`
-	DiscoveryURL    string `json:"discovery_url,omitempty"`
-	IssuedTokenType string `json:"issued_token_type,omitempty"`
-	CorrelationID   string `json:"correlation_id,omitempty"`
+	AccessToken      string `json:"access_token"`
+	TokenType        string `json:"token_type"`
+	ExpiresIn        int    `json:"expires_in"`
+	Scope            string `json:"scope"`
+	SignerURL        string `json:"signer_url,omitempty"`
+	DiscoveryURL     string `json:"discovery_url,omitempty"`
+	IssuedTokenType  string `json:"issued_token_type,omitempty"`
+	CorrelationID    string `json:"correlation_id,omitempty"`
+	HasAccess        bool   `json:"has_access"`
+	BalanceUSDMicros int64  `json:"balance_usd_micros"`
 }
 
 func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
@@ -78,13 +80,15 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeTokenJSON(w, http.StatusOK, tokenExchangeResponse{
-		AccessToken:     result.AccessToken,
-		TokenType:       result.TokenType,
-		ExpiresIn:       result.ExpiresIn,
-		Scope:           result.Scope,
-		SignerURL:       result.SignerURL,
-		DiscoveryURL:    result.DiscoveryURL,
-		IssuedTokenType: result.IssuedTokenType,
-		CorrelationID:   result.CorrelationID,
+		AccessToken:      result.AccessToken,
+		TokenType:        result.TokenType,
+		ExpiresIn:        result.ExpiresIn,
+		Scope:            result.Scope,
+		SignerURL:        result.SignerURL,
+		DiscoveryURL:     result.DiscoveryURL,
+		IssuedTokenType:  result.IssuedTokenType,
+		CorrelationID:    result.CorrelationID,
+		HasAccess:        result.HasAccess,
+		BalanceUSDMicros: result.BalanceUSDMicros,
 	})
 }

@@ -74,6 +74,16 @@ GET /v1/internal/tenants/{clientId}/ingest
 
 Returns `{ url, token, region, org_id }` for CloudEvent POST.
 
+### Builder-api OpenMeter lookup
+
+```http
+GET /v1/internal/tenants/{clientId}/openmeter
+```
+
+Returns `{ openmeter_base, token, region, org_id }` where `token` is the bound
+org admin PAT (for thin customer/subscription/balance calls). Does **not** return
+Provisioner or Usage SPATs.
+
 ## Env
 
 | Variable | Purpose |

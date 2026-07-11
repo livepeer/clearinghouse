@@ -35,7 +35,13 @@ func main() {
 	}
 
 	minter := auth0mint.New(cfg.Auth0Issuer, cfg.Auth0Audience, cfg.SignerM2MClientID, cfg.SignerM2MSecret)
-	omClient := openmeter.New(cfg.OpenMeterURL, cfg.OpenMeterAPIKey)
+	resolver := openmeter.NewResolver(
+		cfg.KonnectCredentialsURL,
+		cfg.PlatformAPISecret,
+		cfg.OpenMeterURL,
+		cfg.OpenMeterAPIKey,
+	)
+	session := openmeter.NewSessionService(resolver)
 
 	// End-user JWT verification is delegated to the identity-webhook (POST /authorize).
 	var verifier tokenexchange.UserTokenVerifier
@@ -55,9 +61,9 @@ func main() {
 		Demo:   demoKeys,
 		Auth0:  auth0Client,
 	}
-	tokenHandler := tokenexchange.NewHandler(cfg, verifier, keyStore, minter, omClient)
+	tokenHandler := tokenexchange.NewHandler(cfg, verifier, keyStore, minter, session)
 
-	srv := httpapi.NewServer(cfg, auth0Client, minter, omClient, tokenHandler, openAPISpec)
+	srv := httpapi.NewServer(cfg, auth0Client, minter, session, tokenHandler, openAPISpec)
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Handler(),

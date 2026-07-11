@@ -24,20 +24,33 @@ func (s stubMinter) MintSignerToken(_ context.Context, _, _ string) (*auth0mint.
 	return s.response, nil
 }
 
-type stubProvisioner struct {
-	err   error
-	calls int
-}
-
 func (s *stubProvisioner) ProvisionSession(context.Context, openmeter.ProvisionConfig, string, string) (*openmeter.SessionProvision, error) {
 	s.calls++
 	if s.err != nil {
 		return nil, s.err
 	}
+	hasAccess := true
+	balance := int64(1_000_000)
+	if s.hasAccess != nil {
+		hasAccess = *s.hasAccess
+	}
+	if s.balance != nil {
+		balance = *s.balance
+	}
 	return &openmeter.SessionProvision{
-		Customer:    &openmeter.Customer{ID: "cust-1", Key: "pub-client:demo-user"},
-		CustomerKey: "pub-client:demo-user",
+		Customer:         &openmeter.Customer{ID: "cust-1", Key: "pub-client:demo-user"},
+		CustomerKey:      "pub-client:demo-user",
+		HasAccess:        hasAccess,
+		BalanceUSDMicros: balance,
+		BalanceSource:    "credits",
 	}, nil
+}
+
+type stubProvisioner struct {
+	err       error
+	calls     int
+	hasAccess *bool
+	balance   *int64
 }
 
 // stubVerifier stands in for the identity-webhook client.
@@ -59,19 +72,27 @@ func (s stubVerifier) VerifyUserAccessToken(_ context.Context, _, expectedClient
 
 func testHandler(t *testing.T, verifier tokenexchange.UserTokenVerifier) *tokenexchange.Handler {
 	t.Helper()
-	cfg := config.Config{
-		Auth0Audience:     "livepeer-clearinghouse",
-		SignerM2MClientID: "m2m-client",
-		SignerM2MSecret:   "m2m-secret",
-		APIKeyPrefix:      "sk_",
-		SignerURL:         "http://localhost:8081",
-		DiscoveryURL:      "http://localhost/discovery",
+	return testHandlerWith(t, verifier, &stubProvisioner{}, config.Config{
+		Auth0Audience:             "livepeer-clearinghouse",
+		SignerM2MClientID:         "m2m-client",
+		SignerM2MSecret:           "m2m-secret",
+		APIKeyPrefix:              "sk_",
+		SignerURL:                 "http://localhost:8081",
+		DiscoveryURL:              "http://localhost/discovery",
+		OpenMeterEnforceAllowance: true,
+	})
+}
+
+func testHandlerWith(t *testing.T, verifier tokenexchange.UserTokenVerifier, provisioner tokenexchange.SessionProvisioner, cfg config.Config) *tokenexchange.Handler {
+	t.Helper()
+	if cfg.APIKeyPrefix == "" {
+		cfg.APIKeyPrefix = "sk_"
 	}
 	return tokenexchange.NewHandler(
 		cfg,
 		verifier,
 		&apikey.Store{
-			Prefix: "sk_",
+			Prefix: cfg.APIKeyPrefix,
 			Demo: map[string]apikey.DemoEntry{
 				"sk_demo": {ClientID: "pub-client", UserID: "demo-user"},
 			},
@@ -82,7 +103,7 @@ func testHandler(t *testing.T, verifier tokenexchange.UserTokenVerifier) *tokene
 			ExpiresIn:   300,
 			Scope:       "sign:job",
 		}},
-		&stubProvisioner{},
+		provisioner,
 	)
 }
 
@@ -258,6 +279,90 @@ func TestExchangeAPIKeyHappyPath(t *testing.T) {
 	if result.IssuedTokenType != tokenexchange.IssuedAccessTokenType {
 		t.Fatalf("issued_token_type = %q", result.IssuedTokenType)
 	}
+	if !result.HasAccess || result.BalanceUSDMicros != 1_000_000 {
+		t.Fatalf("balance fields = has_access=%v balance=%d", result.HasAccess, result.BalanceUSDMicros)
+	}
+}
+
+func TestExchangeBlocksWhenAllowanceExhausted(t *testing.T) {
+	t.Parallel()
+	falseVal := false
+	zero := int64(0)
+	provisioner := &stubProvisioner{hasAccess: &falseVal, balance: &zero}
+	minterCalls := 0
+	h := tokenexchange.NewHandler(
+		config.Config{
+			Auth0Audience:             "livepeer-clearinghouse",
+			SignerM2MClientID:         "m2m-client",
+			SignerM2MSecret:           "m2m-secret",
+			APIKeyPrefix:              "sk_",
+			OpenMeterEnforceAllowance: true,
+		},
+		nil,
+		&apikey.Store{
+			Prefix: "sk_",
+			Demo: map[string]apikey.DemoEntry{
+				"sk_demo": {ClientID: "pub-client", UserID: "demo-user"},
+			},
+		},
+		countingMinter{fn: func() { minterCalls++ }, response: &auth0mint.TokenResponse{AccessToken: "x", ExpiresIn: 1}},
+		provisioner,
+	)
+	_, err := h.Exchange(context.Background(), tokenexchange.Request{
+		PublicClientID:   "pub-client",
+		GrantType:        tokenexchange.GrantType,
+		SubjectToken:     "sk_demo",
+		SubjectTokenType: tokenexchange.SubjectAccessTokenType,
+	}, "corr")
+	if err == nil || err.(*tokenexchange.Error).Code != "insufficient_allowance" {
+		t.Fatalf("expected insufficient_allowance, got %v", err)
+	}
+	if err.(*tokenexchange.Error).Status != 402 {
+		t.Fatalf("expected status 402, got %d", err.(*tokenexchange.Error).Status)
+	}
+	if minterCalls != 0 {
+		t.Fatalf("minter should not be called, got %d", minterCalls)
+	}
+	if provisioner.calls != 1 {
+		t.Fatalf("provisioner calls = %d", provisioner.calls)
+	}
+}
+
+func TestExchangeSkipsGateWhenEnforceDisabled(t *testing.T) {
+	t.Parallel()
+	falseVal := false
+	provisioner := &stubProvisioner{hasAccess: &falseVal}
+	h := testHandlerWith(t, nil, provisioner, config.Config{
+		Auth0Audience:             "livepeer-clearinghouse",
+		SignerM2MClientID:         "m2m-client",
+		SignerM2MSecret:           "m2m-secret",
+		APIKeyPrefix:              "sk_",
+		OpenMeterEnforceAllowance: false,
+	})
+	result, err := h.Exchange(context.Background(), tokenexchange.Request{
+		PublicClientID:   "pub-client",
+		GrantType:        tokenexchange.GrantType,
+		SubjectToken:     "sk_demo",
+		SubjectTokenType: tokenexchange.SubjectAccessTokenType,
+	}, "corr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AccessToken != "minted-jwt" {
+		t.Fatalf("access_token = %q", result.AccessToken)
+	}
+}
+
+type countingMinter struct {
+	fn       func()
+	response *auth0mint.TokenResponse
+}
+
+func (c countingMinter) MintSignerToken(context.Context, string, string) (*auth0mint.TokenResponse, error) {
+	if c.fn != nil {
+		c.fn()
+	}
+	return c.response, nil
 }
 
 func TestExchangeJWTHappyPath(t *testing.T) {

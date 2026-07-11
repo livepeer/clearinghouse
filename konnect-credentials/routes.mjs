@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createKonnectClient, ingestUrl, unwrapOne } from "./konnect-client.mjs";
+import { createKonnectClient, ingestUrl, openMeterBase, unwrapOne } from "./konnect-client.mjs";
 import { bootstrapCatalog } from "./catalog.mjs";
 import { provisionCredentials, rotateCredential } from "./provision.mjs";
 
@@ -36,6 +36,14 @@ export async function routeRequest(request, {
     const m = pathname.match(/^\/v1\/internal\/tenants\/([^/]+)\/ingest$/);
     if (m && request.method === "GET") {
       return getIngest(store, decodeURIComponent(m[1]));
+    }
+  }
+
+  // GET /v1/internal/tenants/:clientId/openmeter — builder-api session provision
+  {
+    const m = pathname.match(/^\/v1\/internal\/tenants\/([^/]+)\/openmeter$/);
+    if (m && request.method === "GET") {
+      return getOpenMeter(store, decodeURIComponent(m[1]));
     }
   }
 
@@ -372,6 +380,20 @@ async function getIngest(store, clientId) {
     org_id: tenant.org_id,
     url: ingestUrl(tenant.region),
     token: tenant.ingest_spat,
+  }, 200);
+}
+
+async function getOpenMeter(store, clientId) {
+  const tenant = await store.getTenant(clientId);
+  if (!tenant?.admin_token) {
+    return json({ error: "tenant_not_bound" }, 404);
+  }
+  return json({
+    client_id: clientId,
+    region: tenant.region,
+    org_id: tenant.org_id,
+    openmeter_base: openMeterBase(tenant.region),
+    token: tenant.admin_token,
   }, 200);
 }
 

@@ -129,6 +129,38 @@ describe("routes isolation and handoff", () => {
     assert.equal(ia.url, "https://us.api.konghq.com/v3/openmeter/events");
     assert.equal(ib.url, "https://eu.api.konghq.com/v3/openmeter/events");
     assert.notEqual(ia.token, ib.token);
+
+    const omA = await routeRequest(
+      new Request("http://localhost/v1/internal/tenants/client-a/openmeter", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${SECRET}` },
+      }),
+      { store, platformSecret: SECRET },
+    );
+    const omB = await routeRequest(
+      new Request("http://localhost/v1/internal/tenants/client-b/openmeter", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${SECRET}` },
+      }),
+      { store, platformSecret: SECRET },
+    );
+    assert.equal(omA.status, 200);
+    assert.equal(omB.status, 200);
+    const oa = await omA.json();
+    const ob = await omB.json();
+    assert.equal(oa.token, "kpat_token-a");
+    assert.equal(ob.token, "kpat_token-b");
+    assert.equal(oa.openmeter_base, "https://us.api.konghq.com/v3/openmeter");
+    assert.equal(ob.openmeter_base, "https://eu.api.konghq.com/v3/openmeter");
+
+    const unbound = await routeRequest(
+      new Request("http://localhost/v1/internal/tenants/missing/openmeter", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${SECRET}` },
+      }),
+      { store, platformSecret: SECRET },
+    );
+    assert.equal(unbound.status, 404);
   });
 
   it("issues credentials and does not return ingest secret", async () => {

@@ -1,15 +1,32 @@
 # Clearinghouse Builder API
 
-Go HTTP service co-located in the `openmeter-collector` container. Provisions **Auth0 end-users**, **OpenMeter customers**, and mints **signer session JWTs** via Auth0.
+Go HTTP service co-located in the `openmeter-collector` container. Provisions **Auth0 end-users**, thin **OpenMeter session** (customer + subscription + optional trial grant), and mints **signer session JWTs** via Auth0.
 
 Scalar docs: `GET /api/v1/docs` (spec at `/api/v1/openapi.json`).
+
+**Not a Konnect billing facade.** Catalog, plans, and usage queries belong to tenant Provisioner/Usage SPATs from [`konnect-credentials`](../../konnect-credentials/README.md). Builder-api only does session glue + pre-mint allowance gate.
+
+## Token exchange flow
+
+```text
+resolve subject (JWT via identity-webhook, or sk_* API key)
+  → ensure OpenMeter customer + default subscription (+ optional trial grant)
+  → read credits/entitlement balance
+  → if OPENMETER_ENFORCE_ALLOWANCE and !has_access: HTTP 402 insufficient_allowance
+  → mint Auth0 signer JWT
+  → response includes access_token + has_access + balance_usd_micros
+```
+
+Per-tenant OpenMeter credentials are loaded from
+`GET {KONNECT_CREDENTIALS_URL}/v1/internal/tenants/{clientId}/openmeter`
+(bound admin PAT). Falls back to `OPENMETER_URL` + `OPENMETER_API_KEY` for single-org local stacks.
 
 ## Endpoints
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/apps/{clientId}/users` | M2M Basic | Create/upsert Auth0 user + OpenMeter customer; returns `apiKey` once |
-| `POST` | `/api/v1/apps/{clientId}/oidc/token` | RFC 8693 form + subject token | Exchange Auth0 user JWT or `sk_*` API key for signer JWT + upsert OpenMeter customer |
+| `POST` | `/api/v1/apps/{clientId}/oidc/token` | RFC 8693 form + subject token | Exchange Auth0 user JWT or `sk_*` API key for signer JWT; 402 if allowance exhausted |
 
 ## Auth0 prerequisites
 
@@ -136,6 +153,26 @@ curl -sS \
 
 The OpenMeter customer key is `{clientId}:{sub}` (e.g. `pub:google-oauth2|…`), matching the CloudEvent `subject`.
 
+Successful exchange JSON includes:
+
+```json
+{
+  "access_token": "...",
+  "token_type": "Bearer",
+  "expires_in": 300,
+  "scope": "sign:job",
+  "has_access": true,
+  "balance_usd_micros": 1000000
+}
+```
+
+When allowance is exhausted (`OPENMETER_ENFORCE_ALLOWANCE=true`, default):
+
+```json
+HTTP 402
+{ "error": "insufficient_allowance", "error_description": "trial credits exhausted; ..." }
+```
+
 ## OpenMeter customer key
 
 Customers are upserted with:
@@ -144,6 +181,21 @@ Customers are upserted with:
 - `usage_attribution.subject_keys`: `["{clientId}:{externalUserId}"]`
 
 This matches the collector CloudEvent `subject` / `auth_id` contract.
+
+Plans, meters, and usage queries: use tenant SPATs from
+[`konnect-credentials`](../../konnect-credentials/README.md) against Kong directly.
+
+## Env (metering)
+
+| Variable | Purpose |
+| --- | --- |
+| `KONNECT_CREDENTIALS_URL` | Per-tenant OpenMeter cred lookup |
+| `PLATFORM_API_SECRET` | Auth to credentials service |
+| `OPENMETER_URL` / `OPENMETER_API_KEY` | Single-org fallback |
+| `OPENMETER_DEFAULT_PLAN_KEY` | Default `clearinghouse_default_ppu` |
+| `OPENMETER_TRIAL_FEATURE_KEY` | Default `billable_spend` |
+| `OPENMETER_TRIAL_GRANT_USD_MICROS` | `0` disables auto trial grant |
+| `OPENMETER_ENFORCE_ALLOWANCE` | Default `true` |
 
 ## Local development
 

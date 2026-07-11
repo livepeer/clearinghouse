@@ -25,14 +25,16 @@ type Request struct {
 
 // Result is a signer-session token exchange response.
 type Result struct {
-	AccessToken     string
-	TokenType       string
-	ExpiresIn       int
-	Scope           string
-	SignerURL       string
-	DiscoveryURL    string
-	IssuedTokenType string
-	CorrelationID   string
+	AccessToken      string
+	TokenType        string
+	ExpiresIn        int
+	Scope            string
+	SignerURL        string
+	DiscoveryURL     string
+	IssuedTokenType  string
+	CorrelationID    string
+	HasAccess        bool
+	BalanceUSDMicros int64
 }
 
 // SignerMinter mints short-lived signer JWTs.
@@ -109,8 +111,12 @@ func (h *Handler) Exchange(ctx context.Context, req Request, correlationID strin
 		return nil, err
 	}
 
-	if _, err := h.openmeter.ProvisionSession(ctx, h.provisionConfig(), clientID, externalUserID); err != nil {
+	session, err := h.openmeter.ProvisionSession(ctx, h.provisionConfig(), clientID, externalUserID)
+	if err != nil {
 		return nil, wrapServerError(err)
+	}
+	if h.cfg.OpenMeterEnforceAllowance && (session == nil || !session.HasAccess) {
+		return nil, insufficientAllowance("trial credits exhausted; top up allowance before minting a signer session")
 	}
 
 	minted, err := h.minter.MintSignerToken(ctx, clientID, externalUserID)
@@ -124,12 +130,18 @@ func (h *Handler) Exchange(ctx context.Context, req Request, correlationID strin
 	}
 
 	result := &Result{
-		AccessToken:     minted.AccessToken,
-		TokenType:       "Bearer",
-		ExpiresIn:       minted.ExpiresIn,
-		Scope:           scope,
-		IssuedTokenType: IssuedAccessTokenType,
-		CorrelationID:   correlationID,
+		AccessToken:      minted.AccessToken,
+		TokenType:        "Bearer",
+		ExpiresIn:        minted.ExpiresIn,
+		Scope:            scope,
+		IssuedTokenType:  IssuedAccessTokenType,
+		CorrelationID:    correlationID,
+		HasAccess:        session != nil && session.HasAccess,
+		BalanceUSDMicros: 0,
+	}
+	if session != nil {
+		result.BalanceUSDMicros = session.BalanceUSDMicros
+		result.HasAccess = session.HasAccess
 	}
 	if h.cfg.SignerURL != "" {
 		result.SignerURL = h.cfg.SignerURL
@@ -142,7 +154,10 @@ func (h *Handler) Exchange(ctx context.Context, req Request, correlationID strin
 
 func (h *Handler) provisionConfig() openmeter.ProvisionConfig {
 	return openmeter.ProvisionConfig{
-		DefaultPlanKey: h.cfg.OpenMeterDefaultPlanKey,
+		DefaultPlanKey:      h.cfg.OpenMeterDefaultPlanKey,
+		TrialFeatureKey:     h.cfg.OpenMeterTrialFeatureKey,
+		TrialGrantUSDMicros: h.cfg.OpenMeterTrialGrantUSDMicros,
+		EnforceAllowance:    h.cfg.OpenMeterEnforceAllowance,
 	}
 }
 

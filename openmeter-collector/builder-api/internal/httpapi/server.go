@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -18,13 +19,17 @@ type Server struct {
 	cfg           config.Config
 	auth0         *auth0mgmt.Client
 	minter        *auth0mint.Minter
-	openmeter     *openmeter.Client
+	openmeter     openmeterSession
 	tokenExchange *tokenexchange.Handler
 	openAPISpec   []byte
 }
 
+type openmeterSession interface {
+	ProvisionSession(ctx context.Context, cfg openmeter.ProvisionConfig, clientID, externalUserID string) (*openmeter.SessionProvision, error)
+}
+
 // NewServer constructs the HTTP API server.
-func NewServer(cfg config.Config, auth0 *auth0mgmt.Client, minter *auth0mint.Minter, om *openmeter.Client, tokenExchange *tokenexchange.Handler, openAPISpec []byte) *Server {
+func NewServer(cfg config.Config, auth0 *auth0mgmt.Client, minter *auth0mint.Minter, om openmeterSession, tokenExchange *tokenexchange.Handler, openAPISpec []byte) *Server {
 	return &Server{
 		cfg:           cfg,
 		auth0:         auth0,
@@ -125,7 +130,9 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := s.openmeter.ProvisionSession(ctx, openmeter.ProvisionConfig{
-		DefaultPlanKey: s.cfg.OpenMeterDefaultPlanKey,
+		DefaultPlanKey:      s.cfg.OpenMeterDefaultPlanKey,
+		TrialFeatureKey:     s.cfg.OpenMeterTrialFeatureKey,
+		TrialGrantUSDMicros: s.cfg.OpenMeterTrialGrantUSDMicros,
 	}, clientID, externalUserID); err != nil {
 		writeAPIError(w, http.StatusBadGateway, "openmeter customer provisioning failed")
 		return
