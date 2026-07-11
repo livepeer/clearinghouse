@@ -67,11 +67,14 @@ assigning one, and that milestone names map to the build phases (e.g.
 
 ## 5. CI / automation (next layer)
 
-Add under `.github/workflows/`:
+Under `.github/workflows/`:
 
-- `ci.yml` — lint, build, unit tests on PR.
-- `release.yml` — tag-based release; can auto-assemble `CHANGELOG_PENDING.md`.
-- Dependabot (`.github/dependabot.yml`) — keep the minimal dependency set patched.
+- `ci.yml` — unit tests and `npm pack --dry-run` for identity-webhook on PR.
+- `release.yml` — tag-based npm publish via OIDC trusted publishing + GitHub Release.
+- `bump-version.yml` — manual semver bump for identity-webhook.
+- `dependabot.yml` — weekly npm + GitHub Actions updates for identity-webhook.
+
+See [identity-webhook/docs/RELEASING.md](../identity-webhook/docs/RELEASING.md) for npm trusted publishing setup.
 
 ## How to apply
 

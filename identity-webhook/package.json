@@ -1,16 +1,55 @@
 {
   "name": "@livepeer/clearinghouse-identity-webhook",
-  "version": "0.2.0",
-  "private": true,
-  "type": "module",
+  "version": "0.3.0",
   "description": "API-key + OIDC identity webhook for go-livepeer remote signer (jose)",
+  "type": "module",
+  "license": "MIT",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "prepack": "npm test"
   },
+  "exports": {
+    "./protocol": {
+      "types": "./protocol.d.ts",
+      "import": "./protocol.mjs"
+    },
+    "./verifiers": {
+      "types": "./verifiers.d.ts",
+      "import": "./verifiers.mjs"
+    }
+  },
+  "files": [
+    "protocol.mjs",
+    "protocol.d.ts",
+    "verifiers.mjs",
+    "verifiers.d.ts",
+    "keys.mjs"
+  ],
   "dependencies": {
     "jose": "^5.9.6"
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "livepeer",
+    "clearinghouse",
+    "identity",
+    "webhook",
+    "remote-signer",
+    "oidc",
+    "go-livepeer"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/livepeer/clearinghouse.git",
+    "directory": "identity-webhook"
+  },
+  "bugs": {
+    "url": "https://github.com/livepeer/clearinghouse/issues"
+  },
+  "homepage": "https://github.com/livepeer/clearinghouse#identity-webhook"
 }

@@ -5,11 +5,15 @@ on:
     paths:
       - "identity-webhook/**"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/bump-version.yml"
   push:
     branches: [main]
     paths:
       - "identity-webhook/**"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/bump-version.yml"
 
 permissions:
   contents: read
@@ -33,3 +37,4 @@ jobs:
           cache-dependency-path: identity-webhook/package-lock.json
       - run: npm ci
       - run: npm test
+      - run: npm pack --dry-run --ignore-scripts

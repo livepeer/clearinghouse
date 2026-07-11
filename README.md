@@ -162,6 +162,8 @@ Shared keys (`WEBHOOK_SECRET`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`) are liste
 
 `PORT` is set by Compose (`8090`), not `.env`. See the `identity-webhook` block in [`.env.example`](.env.example) for Auth0 vs generic OIDC examples.
 
+**npm:** `@livepeer/clearinghouse-identity-webhook` is published from this directory (`./protocol`, `./verifiers`). Releases use tag `v*.*.*` and [trusted publishing](identity-webhook/docs/RELEASING.md).
+
 Signer state (keystore, `.eth-password`, chain DB) is stored under [`remote-signer/data/`](remote-signer/data/), bind-mounted to `/data` in the container.
 
 ```bash

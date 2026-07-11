@@ -1,0 +1,52 @@
+# One-time bootstrap: npm OIDC trusted publishing requires the package to
+# already exist on the registry (first CI publish always E404). Run this
+# workflow once with a granular NPM_TOKEN secret, then configure trusted
+# publishing on npmjs.com and delete the secret.
+#
+# Token: npmjs.com → Access Tokens → Granular → Read and Write on @livepeer
+#        → enable "Bypass two-factor authentication for automation"
+# Secret: gh secret set NPM_TOKEN -R livepeer/clearinghouse
+name: bootstrap-publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to publish (must match package.json version, e.g. v0.3.0)"
+        required: true
+        default: v0.3.0
+        type: string
+
+defaults:
+  run:
+    working-directory: identity-webhook
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: identity-webhook/package-lock.json
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm test
+      - name: Verify tag matches package.json version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          EXPECTED_TAG="v${VER}"
+          if [ "$TAG" != "$EXPECTED_TAG" ]; then
+            echo "::error::Tag ${TAG} does not match package.json version ${VER} (expected ${EXPECTED_TAG})"
+            exit 1
+          fi
+      - name: Publish first version with NPM_TOKEN
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --ignore-scripts

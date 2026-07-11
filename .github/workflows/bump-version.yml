@@ -1,0 +1,47 @@
+name: bump-version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >
+          Semver bump keyword (patch, minor, major, prerelease, …) or an exact
+          version (e.g. 0.3.1 or 0.4.0-rc.1). Passed to `npm version` in
+          identity-webhook/.
+        required: true
+        default: patch
+        type: string
+
+defaults:
+  run:
+    working-directory: identity-webhook
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: identity-webhook/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Bump package version
+        env:
+          VERSION_BUMP: ${{ inputs.version }}
+        run: |
+          npm version "$VERSION_BUMP" -m "chore(identity-webhook): release v%s"
+      - name: Push branch and tag
+        run: |
+          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin --tags
