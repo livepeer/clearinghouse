@@ -64,6 +64,25 @@ services:
       - ./.env:/service/.env:ro
       - ./remote-signer/data:/data
 
+  konnect-credentials:
+    build:
+      context: .
+      dockerfile: konnect-credentials/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      PORT: "8091"
+      DATA_DIR: /data
+    volumes:
+      - konnect-credentials-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8091/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
   openmeter-collector:
     build:
       context: .
@@ -74,9 +93,16 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8095:8095"
+      konnect-credentials:
+        condition: service_healthy
+    environment:
+      KONNECT_CREDENTIALS_URL: http://konnect-credentials:8091
     volumes:
       - ./.env:/service/.env:ro
       - ./auth0-provisioner/provision/.env.livepeer:/service/.env.livepeer:ro
 
 # Signer datadir is bind-mounted from remote-signer/data.
 # Copy keystore + .eth-password into remote-signer/data before first run.
+
+volumes:
+  konnect-credentials-data:

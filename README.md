@@ -8,10 +8,11 @@ Docker Compose stack for the clearinghouse runtime:
 | Service | Role | Docs |
 | --- | --- | --- |
 | **identity-webhook** (`identity-webhook`) | Resolves end-user credentials (API keys and/or OAuth/OIDC JWTs) to `auth_id` for go-livepeer's `/authorize` hook. Self-contained: implements the go-livepeer webhook wire protocol in-repo, verifying JWTs with `jose`. | [jose](https://github.com/panva/jose) |
+| **konnect-credentials** (`konnect-credentials`) | Binds a per-tenant Konnect org and issues Provisioner / Usage SPATs (Ingest SPAT retained for the collector). Tenants call Konnect Metering & Billing directly — no API mirror. | [konnect-credentials/README.md](konnect-credentials/README.md) |
 | **Redpanda** (`kafka`) | Kafka-compatible event bus. The signer publishes gateway events; the collector consumes them. | [Redpanda docs](https://docs.redpanda.com/) |
 | **go-livepeer remote signer** (`remote-signer`) | Signs Livepeer payment tickets and emits `create_signed_ticket` events to Kafka. | [go-livepeer](https://github.com/livepeer/go-livepeer) |
-| **OpenMeter collector** (`openmeter-collector`) | Benthos pipeline: filters Kafka events, converts fees to USD micros, POSTs CloudEvents to OpenMeter ingest. | [OpenMeter collector](https://openmeter.io/docs/collectors) |
-| **Konnect / OpenMeter** (external) | Hosted metering and billing API. Set `OPENMETER_URL` to your OpenMeter API base; the collector appends the events path. | [Konnect OpenMeter](https://docs.konghq.com/konnect/openmeter/), [self-hosted OpenMeter](https://openmeter.io/docs/deploy/kubernetes) |
+| **OpenMeter collector** (`openmeter-collector`) | Benthos pipeline: filters Kafka events, converts fees to USD micros, POSTs CloudEvents to OpenMeter ingest (per-tenant Ingest SPAT when bound). | [OpenMeter collector](https://openmeter.io/docs/collectors) |
+| **Konnect / OpenMeter** (external) | Hosted metering and billing API. One org per platform tenant for SPAT isolation. | [Konnect OpenMeter](https://docs.konghq.com/konnect/openmeter/), [self-hosted OpenMeter](https://openmeter.io/docs/deploy/kubernetes) |
 
 Data flow:
 
@@ -215,6 +216,19 @@ The collector emits `billable_usd_micros` as an interim passthrough equal to
 `network_fee_usd_micros` so the billable meter validates and accumulates. Phase-2
 markup rules (network × pipeline/model multiplier) are not applied yet — until then
 `billable_usd_micros == network_fee_usd_micros`.
+
+### Per-tenant Konnect SPATs
+
+For multi-tenant isolation, bind one Konnect org per `client_id` and issue SPATs
+via [`konnect-credentials`](konnect-credentials/README.md):
+
+1. `POST /v1/tenants/{clientId}/konnect/bind` — BYO org admin PAT
+2. `POST /v1/tenants/{clientId}/konnect/credentials` — Provisioner + Usage SPATs (once)
+3. `POST /v1/tenants/{clientId}/konnect/catalog` — meters / features / default plan
+4. Collector looks up Ingest SPAT at `GET /v1/internal/tenants/{clientId}/ingest`
+
+Single-org local stacks can still set `OPENMETER_URL` + `OPENMETER_API_KEY` and leave
+tenants unbound; the collector falls back to those env vars when the lookup misses.
 
 ### Identity contract (collector)
 

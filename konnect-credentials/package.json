@@ -1,0 +1,25 @@
+{
+  "name": "@pymthouse/clearinghouse-konnect-credentials",
+  "version": "0.1.0",
+  "description": "Bind per-tenant Konnect orgs and issue Provisioner / Usage / Ingest SPATs",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "files": [
+    "*.mjs",
+    "catalog.json"
+  ],
+  "keywords": [
+    "livepeer",
+    "clearinghouse",
+    "konnect",
+    "openmeter",
+    "spat"
+  ]
+}

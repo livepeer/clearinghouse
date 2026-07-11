@@ -1,0 +1,83 @@
+{
+  "$comment": "OpenMeter/Konnect metering catalog for the clearinghouse collector. Provisioned idempotently by bootstrap.sh / bootstrap.ps1. Meters are immutable in OpenMeter — the scripts only create missing entries, they never update or delete. Dimensions/value_property must match the CloudEvent fields emitted by openmeter-collector/collector.yaml.",
+  "meters": [
+    {
+      "key": "network_fee_usd_micros",
+      "name": "Network fee (USD micros)",
+      "description": "Raw network cost in USD micros from the signer (observability).",
+      "event_type": "create_signed_ticket",
+      "aggregation": "sum",
+      "value_property": "$.network_fee_usd_micros",
+      "dimensions": {
+        "client_id": "$.client_id",
+        "external_user_id": "$.external_user_id",
+        "model_id": "$.model_id",
+        "pipeline": "$.pipeline"
+      }
+    },
+    {
+      "key": "billable_usd_micros",
+      "name": "Billable usage (USD micros)",
+      "description": "Post-markup billable amount in USD micros for pay-per-use billing. Not emitted by the collector until phase-2 markup; meter stays empty until then.",
+      "event_type": "create_signed_ticket",
+      "aggregation": "sum",
+      "value_property": "$.billable_usd_micros",
+      "dimensions": {
+        "client_id": "$.client_id",
+        "external_user_id": "$.external_user_id",
+        "model_id": "$.model_id",
+        "pipeline": "$.pipeline"
+      }
+    },
+    {
+      "key": "signed_ticket_count",
+      "name": "Signed ticket count",
+      "description": "Count of create_signed_ticket events (request volume).",
+      "event_type": "create_signed_ticket",
+      "aggregation": "count",
+      "dimensions": {
+        "client_id": "$.client_id",
+        "external_user_id": "$.external_user_id",
+        "model_id": "$.model_id",
+        "pipeline": "$.pipeline"
+      }
+    }
+  ],
+  "features": [
+    {
+      "key": "network_spend",
+      "name": "Network spend",
+      "meter_key": "network_fee_usd_micros"
+    },
+    {
+      "key": "billable_spend",
+      "name": "Billable spend",
+      "meter_key": "billable_usd_micros"
+    }
+  ],
+  "plan": {
+    "key": "clearinghouse_default_ppu",
+    "name": "Clearinghouse default pay-per-use",
+    "description": "Default pay-per-use plan billed on billable_usd_micros usage (1 USD micro = $0.000001).",
+    "currency": "USD",
+    "billing_cadence": "P1M",
+    "phases": [
+      {
+        "key": "default",
+        "name": "Default",
+        "rate_cards": [
+          {
+            "key": "billable_spend",
+            "name": "Billable spend",
+            "feature_key": "billable_spend",
+            "billing_cadence": "P1M",
+            "price": {
+              "type": "unit",
+              "amount": "0.000001"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

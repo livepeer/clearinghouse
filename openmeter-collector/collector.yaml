@@ -159,6 +159,52 @@ pipeline:
           }
         }
 
+    - mapping: |
+        meta client_id = this.data.client_id.or("")
+
+    # Per-tenant ingest: look up Ingest SPAT from konnect-credentials when configured.
+    # Falls back to OPENMETER_URL + OPENMETER_API_KEY for single-org / local stacks.
+    - branch:
+        request_map: |
+          root = if env("KONNECT_CREDENTIALS_URL").or("") == "" {
+            deleted()
+          } else {
+            {}
+          }
+        processors:
+          - try:
+              - http:
+                  url: '${KONNECT_CREDENTIALS_URL}/v1/internal/tenants/${! meta("client_id")}/ingest'
+                  verb: GET
+                  headers:
+                    Authorization: "Bearer ${PLATFORM_API_SECRET}"
+                    Accept: application/json
+          - catch:
+              - log:
+                  level: WARN
+                  message: "konnect ingest lookup failed for client_id=${! meta(\"client_id\") }: ${! error() }"
+              - mapping: root = deleted()
+        result_map: |
+          meta openmeter_url = if this.exists("url") { this.url } else { meta("openmeter_url") }
+          meta openmeter_token = if this.exists("token") { this.token } else { meta("openmeter_token") }
+
+    - mapping: |
+        meta openmeter_url = if meta("openmeter_url") != null && meta("openmeter_url") != "" {
+          meta("openmeter_url")
+        } else {
+          env("OPENMETER_URL")
+        }
+        meta openmeter_token = if meta("openmeter_token") != null && meta("openmeter_token") != "" {
+          meta("openmeter_token")
+        } else {
+          env("OPENMETER_API_KEY")
+        }
+        root = if meta("openmeter_url") == null || meta("openmeter_url") == "" || meta("openmeter_token") == null || meta("openmeter_token") == "" {
+          throw("openmeter ingest url/token unresolved for client_id=" + meta("client_id").or(""))
+        } else {
+          this
+        }
+
     - catch:
         - log:
             level: ERROR
@@ -167,10 +213,10 @@ pipeline:
 
 output:
   http_client:
-    url: ${OPENMETER_URL}
+    url: '${! meta("openmeter_url") }'
     verb: POST
     headers:
-      Authorization: "Bearer ${OPENMETER_API_KEY}"
+      Authorization: 'Bearer ${! meta("openmeter_token") }'
       Content-Type: application/cloudevents+json
     successful_on:
       - 200
