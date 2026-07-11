@@ -14,6 +14,12 @@
  *   success → 200 { status:200, auth_id:"client_id:usage_subject", identity, expiry }
  *   reject  → 200 { status:<480-483|503|4xx>, reason, code? }  (HTTP 200, status in body)
  *   bad caller secret → HTTP 401, bad JSON → HTTP 400.
+ *
+ * Consumers may attach an optional `config.checkBalance` hook to enforce a live
+ * credit/allowance gate at sign time (see ./balance-gate.mjs). It runs after the
+ * identity is verified and can reject with status 483 (insufficient_balance) /
+ * 503 (billing_unavailable), or shorten the returned `expiry` so go-livepeer
+ * re-authorizes (and re-checks the balance) sooner.
  */
 import { timingSafeEqual } from "node:crypto";
 
@@ -160,9 +166,29 @@ export async function handleAuthorize(request, config) {
     if (!isValidUsageIdentity(verified.identity)) {
       throw new WebhookError("verifier returned incomplete identity", { status: 500 });
     }
+
+    // Optional live balance/credit gate, applied after identity is proven and
+    // regardless of verifier kind (OIDC, composite, API key). Throwing a
+    // WebhookError (e.g. status 483 insufficient_balance) rejects the request;
+    // returning `{ expiry }` caps how long go-livepeer may cache this auth
+    // before it must call back and re-check the balance.
+    let expiry = verified.expiry;
+    if (typeof config.checkBalance === "function") {
+      const decision = await config.checkBalance({
+        identity: verified.identity,
+        expiry: verified.expiry,
+        raw: verified.raw,
+        payload,
+        request,
+      });
+      if (decision && typeof decision.expiry === "number") {
+        expiry = Math.min(expiry, decision.expiry);
+      }
+    }
+
     return paymentWebhookJson(200, {
       status: 200,
-      expiry: verified.expiry,
+      expiry,
       auth_id: authIdFromIdentity(verified.identity),
       identity: verified.identity,
     });
