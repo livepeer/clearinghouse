@@ -467,7 +467,74 @@ describe("createOidcVerifier composite API key exchange", () => {
     });
     await assert.rejects(
       () => verifier.verify({ authorization: `Bearer ${clientId}_bad` }),
-      /token exchange failed/,
+      (err) => {
+        assert.equal(err.name, "WebhookError");
+        assert.equal(err.status, 401);
+        assert.equal(err.code, "invalid_token");
+        assert.match(err.message, /token exchange failed|invalid/);
+        return true;
+      },
+    );
+  });
+
+  it("maps exchange 402 trial_credits_exhausted to webhook 483", async () => {
+    const { jwks } = await setup();
+    const clientId = "app_3b386c81a1db1169fd2c3986";
+    const fetchImpl = async () =>
+      Response.json(
+        {
+          error: "trial_credits_exhausted",
+          error_description: "Starter allowance exhausted",
+          correlation_id: "c-402",
+        },
+        { status: 402 },
+      );
+    const verifier = createOidcVerifier({
+      jwtIssuer: "https://idp.test/",
+      jwtAudience: "clearinghouse",
+      jwks,
+      tokenExchangeBaseUrl: "https://billing.test",
+      fetchImpl,
+    });
+    await assert.rejects(
+      () => verifier.verify({ authorization: `Bearer ${clientId}_deadbeef` }),
+      (err) => {
+        assert.equal(err.name, "WebhookError");
+        assert.equal(err.status, 483);
+        assert.equal(err.code, "insufficient_balance");
+        assert.equal(err.message, "Starter allowance exhausted");
+        return true;
+      },
+    );
+  });
+
+  it("maps exchange billing_unavailable to webhook 503", async () => {
+    const { jwks } = await setup();
+    const clientId = "app_3b386c81a1db1169fd2c3986";
+    const fetchImpl = async () =>
+      Response.json(
+        {
+          error: "billing_unavailable",
+          error_description: "Billing allowance could not be confirmed",
+        },
+        { status: 402 },
+      );
+    const verifier = createOidcVerifier({
+      jwtIssuer: "https://idp.test/",
+      jwtAudience: "clearinghouse",
+      jwks,
+      tokenExchangeBaseUrl: "https://billing.test",
+      fetchImpl,
+    });
+    await assert.rejects(
+      () => verifier.verify({ authorization: `Bearer ${clientId}_deadbeef` }),
+      (err) => {
+        assert.equal(err.name, "WebhookError");
+        assert.equal(err.status, 503);
+        assert.equal(err.code, "billing_unavailable");
+        assert.equal(err.message, "Billing allowance could not be confirmed");
+        return true;
+      },
     );
   });
 });
