@@ -144,24 +144,28 @@ export function createApiKeyVerifier({
   };
 }
 
+/** Trim and strip a trailing slash so issuer comparisons are stable. */
+function normalizeIssuer(issuer) {
+  return String(issuer ?? "").trim().replace(/\/$/, "");
+}
+
 /**
  * Resolve `jwks_uri` via OIDC Discovery (issuer-relative
  * `/.well-known/openid-configuration`), matching oauth4webapi / builder-sdk.
  *
- * Example: issuer `https://issuer.example/api/v1/oidc` →
- * discovery advertises `jwks_uri` `https://issuer.example/api/v1/oidc/jwks`.
+ * Example: issuer `https://idp.example/api/v1/oidc` →
+ * discovery advertises `jwks_uri` `https://idp.example/api/v1/oidc/jwks`.
  *
  * @param {string} jwtIssuer
  * @param {{ fetchImpl?: typeof fetch }} [options]
  * @returns {Promise<string>}
  */
-function normalizeIssuer(issuer) {
-  return String(issuer ?? "").replace(/\/$/, "");
-}
-
 export async function discoverJwksUri(jwtIssuer, options = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const base = normalizeIssuer(jwtIssuer);
+  if (!base) {
+    throw new Error("discoverJwksUri: jwtIssuer is required");
+  }
   const url = `${base}/.well-known/openid-configuration`;
   let response;
   try {
@@ -172,7 +176,7 @@ export async function discoverJwksUri(jwtIssuer, options = {}) {
     );
   }
   if (!response.ok) {
-    throw new Error(`OIDC discovery failed: expected 200 from ${url}, got ${response.status}`);
+    throw new Error(`OIDC discovery failed (${url}): HTTP ${response.status}`);
   }
   let doc;
   try {
@@ -203,6 +207,11 @@ export async function discoverJwksUri(jwtIssuer, options = {}) {
  */
 function createOidcKeyResolver({ jwks, jwksUri, jwtIssuer, fetchImpl }) {
   if (jwks) {
+    if (typeof jwks !== "function") {
+      throw new Error(
+        "createOidcVerifier: jwks must be a jose key resolver function (e.g. createLocalJWKSet(...))",
+      );
+    }
     return jwks;
   }
 
@@ -222,9 +231,7 @@ function createOidcKeyResolver({ jwks, jwksUri, jwtIssuer, fetchImpl }) {
             );
           }
           if (!response.ok) {
-            throw new Error(
-              `Expected 200 OK from the JSON Web Key Set HTTP response (${uri}) [${response.status}]`,
-            );
+            throw new Error(`JWKS request failed (${uri}): HTTP ${response.status}`);
           }
           let doc;
           try {
@@ -232,11 +239,31 @@ function createOidcKeyResolver({ jwks, jwksUri, jwtIssuer, fetchImpl }) {
           } catch {
             throw new Error(`JWKS response is not JSON (${uri})`);
           }
-          return createLocalJWKSet(doc);
+          try {
+            return createLocalJWKSet(doc);
+          } catch (err) {
+            throw new Error(
+              `JWKS is invalid (${uri}): ${err instanceof Error ? err.message : err}`,
+            );
+          }
         }
-        return createRemoteJWKSet(new URL(uri));
+        let jwksUrl;
+        try {
+          jwksUrl = new URL(uri);
+        } catch (err) {
+          throw new Error(
+            `JWKS URI is not a valid URL (${uri}): ${err instanceof Error ? err.message : err}`,
+          );
+        }
+        return createRemoteJWKSet(jwksUrl);
       })();
-      remote = await resolving;
+      try {
+        remote = await resolving;
+      } catch (err) {
+        // Clear so a later verify can retry after transient discovery/JWKS failures.
+        resolving = undefined;
+        throw err;
+      }
     }
     return remote(protectedHeader, token);
   };
