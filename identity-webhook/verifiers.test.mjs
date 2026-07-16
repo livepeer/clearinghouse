@@ -12,21 +12,21 @@ const ISSUER = "http://identity-webhook:8090";
 
 describe("discoverJwksUri", () => {
   it("reads jwks_uri from issuer-relative openid-configuration", async () => {
+    const issuer = "https://idp.test/api/v1/oidc";
+    const jwksUri = `${issuer}/jwks`;
     const seen = [];
     const fetchImpl = async (input) => {
       seen.push(String(input));
       return Response.json({
-        issuer: "https://staging.pymthouse.com/api/v1/oidc",
-        jwks_uri: "https://staging.pymthouse.com/api/v1/oidc/jwks",
+        issuer,
+        jwks_uri: jwksUri,
       });
     };
-    const uri = await discoverJwksUri("https://staging.pymthouse.com/api/v1/oidc", {
+    const uri = await discoverJwksUri(issuer, {
       fetchImpl,
     });
-    assert.equal(uri, "https://staging.pymthouse.com/api/v1/oidc/jwks");
-    assert.deepEqual(seen, [
-      "https://staging.pymthouse.com/api/v1/oidc/.well-known/openid-configuration",
-    ]);
+    assert.equal(uri, jwksUri);
+    assert.deepEqual(seen, [`${issuer}/.well-known/openid-configuration`]);
   });
 
   it("rejects discovery without jwks_uri", async () => {

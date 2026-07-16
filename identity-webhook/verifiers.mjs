@@ -68,8 +68,8 @@ function normalizeIssuer(issuer) {
  * Resolve `jwks_uri` via OIDC Discovery (issuer-relative
  * `/.well-known/openid-configuration`), matching oauth4webapi / builder-sdk.
  *
- * Example: issuer `https://staging.pymthouse.com/api/v1/oidc` →
- * discovery advertises `jwks_uri` `https://staging.pymthouse.com/api/v1/oidc/jwks`.
+ * Example: issuer `https://idp.example/api/v1/oidc` →
+ * discovery advertises `jwks_uri` `https://idp.example/api/v1/oidc/jwks`.
  *
  * @param {string} jwtIssuer
  * @param {{ fetchImpl?: typeof fetch }} [options]
