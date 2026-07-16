@@ -24,7 +24,9 @@ const SUBJECT_ACCESS_TOKEN_TYPE =
 /** Underscore composite: `app_<24hex>_<opaqueSecret>` (no `.` — better copy/select UX). */
 const COMPOSITE_API_KEY_RE = /^(app_[a-f0-9]{24})_(.+)$/;
 const COMPOSITE_CACHE_MAX_TTL_SECONDS = 60;
-const ALLOWED_JWT_ALGS = ["RS256"];
+/** Asymmetric algs only — never HS* (shared-secret confusion). */
+const ALLOWED_JWT_ALGS = ["RS256", "ES256"];
+const JWT_CLOCK_TOLERANCE_SECONDS = 60;
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -56,11 +58,13 @@ function isLoopbackHost(hostname) {
 
 /**
  * Validate OIDC_TOKEN_EXCHANGE_BASE_URL: HTTPS required except loopback.
+ * Must be an origin only — path/query/hash are rejected so a mis-set
+ * `https://host/exchange` cannot silently become `https://host`.
  * @param {string} baseUrl
  * @returns {string} normalized origin (no trailing slash)
  */
 export function normalizeTokenExchangeBaseUrl(baseUrl) {
-  const trimmed = (baseUrl ?? "").trim().replace(/\/$/, "");
+  const trimmed = (baseUrl ?? "").trim();
   if (!trimmed) {
     throw new Error("tokenExchangeBaseUrl is required for composite API key exchange");
   }
@@ -69,6 +73,12 @@ export function normalizeTokenExchangeBaseUrl(baseUrl) {
     url = new URL(trimmed);
   } catch {
     throw new Error(`tokenExchangeBaseUrl is not a valid URL: ${trimmed}`);
+  }
+  const path = url.pathname.replace(/\/$/, "") || "/";
+  if (path !== "/" || url.search || url.hash) {
+    throw new Error(
+      `tokenExchangeBaseUrl must be an origin only (no path, query, or hash); got ${trimmed}`,
+    );
   }
   if (url.protocol === "https:") {
     return url.origin;
@@ -307,8 +317,8 @@ function mapVerifiedPayloadToIdentity({
     usage_subject: String(usageSubject),
     usage_subject_type: subjectTypeValue,
   };
-  const expiry = typeof payload.exp === "number" ? payload.exp : nowSeconds() + 60;
-  return { identity, expiry, raw: payload };
+  // `exp` is required by jwtVerify(requiredClaims); no forever-valid fallback.
+  return { identity, expiry: payload.exp, raw: payload };
 }
 
 async function verifyJwtBearer({
@@ -328,6 +338,8 @@ async function verifyJwtBearer({
       issuer: jwtIssuer,
       audience: jwtAudience,
       algorithms: ALLOWED_JWT_ALGS,
+      requiredClaims: ["exp", subjectClaim],
+      clockTolerance: JWT_CLOCK_TOLERANCE_SECONDS,
     }));
   } catch (err) {
     console.warn(`oidc verification failed: ${err.message}`);
@@ -348,7 +360,8 @@ async function verifyJwtBearer({
   });
 }
 
-function createCompositeExchangeCache() {
+/** @internal Exported for unit tests. */
+export function createCompositeExchangeCache() {
   /** @type {Map<string, { expiresAt: number, result?: any, inflight?: Promise<any> }>} */
   const cache = new Map();
 
@@ -358,7 +371,11 @@ function createCompositeExchangeCache() {
       if (!entry) {
         return null;
       }
-      if (entry.result !== undefined && entry.expiresAt > nowSeconds()) {
+      if (entry.expiresAt <= nowSeconds()) {
+        cache.delete(key);
+        return null;
+      }
+      if (entry.result !== undefined) {
         return entry.result;
       }
       if (entry.inflight !== undefined) {
@@ -488,7 +505,8 @@ export function createOidcVerifier({
   exchangeM2mClientId,
   exchangeM2mClientSecret,
 }) {
-  if (!jwtIssuer) {
+  const normalizedJwtIssuer = normalizeIssuer(jwtIssuer);
+  if (!normalizedJwtIssuer) {
     throw new Error("createOidcVerifier: jwtIssuer is required");
   }
   if (!jwtAudience) {
@@ -497,10 +515,10 @@ export function createOidcVerifier({
   const keyset = createOidcKeyResolver({
     jwks,
     jwksUri,
-    jwtIssuer,
+    jwtIssuer: normalizedJwtIssuer,
     fetchImpl,
   });
-  const identityIssuer = issuer ?? jwtIssuer;
+  const identityIssuer = issuer ?? normalizedJwtIssuer;
   const http = fetchImpl ?? fetch;
   const exchangeOrigin = tokenExchangeBaseUrl
     ? normalizeTokenExchangeBaseUrl(tokenExchangeBaseUrl)
@@ -518,7 +536,7 @@ export function createOidcVerifier({
     return verifyJwtBearer({
       token,
       keyset,
-      jwtIssuer,
+      jwtIssuer: normalizedJwtIssuer,
       jwtAudience,
       identityIssuer,
       clientClaim,

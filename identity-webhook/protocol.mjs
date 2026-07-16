@@ -42,10 +42,10 @@ export class WebhookError extends Error {
   }
 }
 
-/** Strip a `Bearer ` prefix (case-insensitive); returns the raw token otherwise. */
+/** Extract the token from `Bearer <token>` (RFC 6750); empty if scheme is missing. */
 export function bearerToken(authorization) {
-  const value = (authorization ?? "").trim();
-  return value.replace(/^Bearer\s+/i, "").trim();
+  const m = /^Bearer\s+(.+)$/i.exec((authorization ?? "").trim());
+  return m ? m[1].trim() : "";
 }
 
 function timingSafeEqualStrings(a, b) {

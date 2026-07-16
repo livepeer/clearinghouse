@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
 import {
   createApiKeyVerifier,
+  createCompositeExchangeCache,
   createEndUserVerifierFromEnv,
   createOidcVerifier,
   discoverJwksUri,
@@ -325,7 +326,7 @@ describe("createOidcVerifier (jose, locally-minted JWT)", () => {
     return { privateKey, jwks };
   }
 
-  async function mint(privateKey, claims, { aud = "clearinghouse", iss = "https://idp.test/" } = {}) {
+  async function mint(privateKey, claims, { aud = "clearinghouse", iss = "https://idp.test" } = {}) {
     return new SignJWT(claims)
       .setProtectedHeader({ alg: "RS256", kid: "test-key" })
       .setIssuer(iss)
@@ -352,6 +353,37 @@ describe("createOidcVerifier (jose, locally-minted JWT)", () => {
     assert.equal(identity.usage_subject, "user-b");
     assert.equal(identity.usage_subject_type, "oidc_user");
     assert.equal(typeof expiry, "number");
+  });
+
+  it("normalizes jwtIssuer whitespace and trailing slash for verification", async () => {
+    const { privateKey, jwks } = await setup();
+    const token = await mint(privateKey, { sub: "user-b", azp: "app-b" });
+    const verifier = createOidcVerifier({
+      jwtIssuer: "  https://idp.test/  ",
+      jwtAudience: "clearinghouse",
+      jwks,
+    });
+    const { identity } = await verifier.verify({ authorization: `Bearer ${token}` });
+    assert.equal(identity.usage_subject, "user-b");
+  });
+
+  it("rejects a token without exp", async () => {
+    const { privateKey, jwks } = await setup();
+    const token = await new SignJWT({ sub: "user-b", azp: "app-b" })
+      .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+      .setIssuer("https://idp.test")
+      .setAudience("clearinghouse")
+      .setIssuedAt()
+      .sign(privateKey);
+    const verifier = createOidcVerifier({
+      jwtIssuer: "https://idp.test",
+      jwtAudience: "clearinghouse",
+      jwks,
+    });
+    await assert.rejects(
+      () => verifier.verify({ authorization: `Bearer ${token}` }),
+      /oidc verification failed/,
+    );
   });
 
   it("rejects a wrong audience", async () => {
@@ -464,7 +496,7 @@ describe("createEndUserVerifierFromEnv", () => {
 
     const token = await new SignJWT({ azp: "app-b", scope: "other" })
       .setProtectedHeader({ alg: "RS256", kid: "k" })
-      .setIssuer("https://idp.test/")
+      .setIssuer("https://idp.test")
       .setAudience("clearinghouse")
       .setSubject("user-b")
       .setIssuedAt()
@@ -544,6 +576,50 @@ describe("splitCompositeApiKey / normalizeTokenExchangeBaseUrl", () => {
       () => normalizeTokenExchangeBaseUrl("http://billing.example.com"),
       /must be https/,
     );
+  });
+
+  it("rejects path, query, or hash (origin only)", () => {
+    assert.throws(
+      () => normalizeTokenExchangeBaseUrl("https://billing.example.com/exchange"),
+      /origin only/,
+    );
+    assert.throws(
+      () => normalizeTokenExchangeBaseUrl("https://billing.example.com/?x=1"),
+      /origin only/,
+    );
+    assert.throws(
+      () => normalizeTokenExchangeBaseUrl("https://billing.example.com/#frag"),
+      /origin only/,
+    );
+  });
+});
+
+describe("createCompositeExchangeCache", () => {
+  it("expires inflight entries the same way as results", async () => {
+    const cache = createCompositeExchangeCache();
+    const realNow = Date.now;
+    let fakeMs = 1_700_000_000_000;
+    Date.now = () => fakeMs;
+    try {
+      let resolveHang;
+      const hang = new Promise((resolve) => {
+        resolveHang = resolve;
+      });
+      cache.setInflight("k", hang);
+      assert.equal(cache.get("k"), hang);
+
+      fakeMs += 61_000;
+      assert.equal(cache.get("k"), null);
+
+      const result = { ok: true };
+      cache.setResult("k", result, 30);
+      assert.deepEqual(cache.get("k"), result);
+      fakeMs += 31_000;
+      assert.equal(cache.get("k"), null);
+      resolveHang();
+    } finally {
+      Date.now = realNow;
+    }
   });
 });
 
