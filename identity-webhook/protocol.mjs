@@ -44,21 +44,8 @@ export class WebhookError extends Error {
 
 /** Extract the token from `Bearer <token>` (RFC 6750); empty if scheme is missing. */
 export function bearerToken(authorization) {
-  const value = (authorization ?? "").trim();
-  const scheme = "Bearer";
-  if (
-    value.length <= scheme.length ||
-    value.slice(0, scheme.length).toLowerCase() !== scheme.toLowerCase() ||
-    value[scheme.length] !== " "
-  ) {
-    return "";
-  }
-
-  let tokenStart = scheme.length + 1;
-  while (value[tokenStart] === " ") {
-    tokenStart += 1;
-  }
-  return value.slice(tokenStart);
+  const match = /^Bearer +([A-Za-z0-9._~+/-]+=*)$/i.exec((authorization ?? "").trim());
+  return match?.[1] ?? "";
 }
 
 function timingSafeEqualStrings(a, b) {
