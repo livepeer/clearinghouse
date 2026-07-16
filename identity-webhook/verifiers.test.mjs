@@ -367,6 +367,22 @@ describe("createOidcVerifier (jose, locally-minted JWT)", () => {
     assert.equal(identity.usage_subject, "user-b");
   });
 
+  it("accepts tokens whose iss claim has a trailing slash", async () => {
+    const { privateKey, jwks } = await setup();
+    const token = await mint(
+      privateKey,
+      { sub: "user-b", azp: "app-b" },
+      { iss: "https://idp.test/" },
+    );
+    const verifier = createOidcVerifier({
+      jwtIssuer: "https://idp.test",
+      jwtAudience: "clearinghouse",
+      jwks,
+    });
+    const { identity } = await verifier.verify({ authorization: `Bearer ${token}` });
+    assert.equal(identity.usage_subject, "user-b");
+  });
+
   it("rejects a token without exp", async () => {
     const { privateKey, jwks } = await setup();
     const token = await new SignJWT({ sub: "user-b", azp: "app-b" })
@@ -620,6 +636,23 @@ describe("createCompositeExchangeCache", () => {
     } finally {
       Date.now = realNow;
     }
+  });
+
+  it("clearInflight / setResultForInflight only touch the matching promise", async () => {
+    const cache = createCompositeExchangeCache();
+    const older = Promise.resolve("old");
+    const newer = Promise.resolve("new");
+    cache.setInflight("k", older);
+    cache.setInflight("k", newer);
+
+    cache.clearInflight("k", older);
+    assert.equal(cache.get("k"), newer);
+
+    cache.setResultForInflight("k", older, { from: "old" }, 30);
+    assert.equal(cache.get("k"), newer);
+
+    cache.setResultForInflight("k", newer, { from: "new" }, 30);
+    assert.deepEqual(cache.get("k"), { from: "new" });
   });
 });
 

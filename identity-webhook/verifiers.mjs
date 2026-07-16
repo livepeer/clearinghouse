@@ -334,8 +334,10 @@ async function verifyJwtBearer({
 }) {
   let payload;
   try {
+    // Accept iss with or without a trailing slash (OIDC issuers vary); jwtIssuer is
+    // already normalized (no trailing slash) for discovery/caching.
     ({ payload } = await jwtVerify(token, keyset, {
-      issuer: jwtIssuer,
+      issuer: [jwtIssuer, `${jwtIssuer}/`],
       audience: jwtAudience,
       algorithms: ALLOWED_JWT_ALGS,
       requiredClaims: ["exp", subjectClaim],
@@ -391,6 +393,22 @@ export function createCompositeExchangeCache() {
       });
     },
     setResult(key, result, ttlSeconds) {
+      const ttl = Math.max(1, Math.min(ttlSeconds, COMPOSITE_CACHE_MAX_TTL_SECONDS));
+      cache.set(key, { expiresAt: nowSeconds() + ttl, result });
+    },
+    /** Only clear when this promise is still the cached inflight (avoid clobbering a newer entry). */
+    clearInflight(key, promise) {
+      const entry = cache.get(key);
+      if (entry?.inflight === promise) {
+        cache.delete(key);
+      }
+    },
+    /** Only store a result when this promise is still the cached inflight. */
+    setResultForInflight(key, promise, result, ttlSeconds) {
+      const entry = cache.get(key);
+      if (entry?.inflight !== promise) {
+        return;
+      }
       const ttl = Math.max(1, Math.min(ttlSeconds, COMPOSITE_CACHE_MAX_TTL_SECONDS));
       cache.set(key, { expiresAt: nowSeconds() + ttl, result });
     },
@@ -560,7 +578,8 @@ export function createOidcVerifier({
       return cached;
     }
 
-    const inflight = (async () => {
+    let inflight;
+    inflight = (async () => {
       const accessToken = await exchangeCompositeApiKey({
         exchangeBaseUrl: exchangeOrigin,
         publicClientId: parts.publicClientId,
@@ -579,10 +598,10 @@ export function createOidcVerifier({
         });
       }
       const ttl = Math.max(1, verified.expiry - nowSeconds());
-      exchangeCache.setResult(cacheKey, verified, ttl);
+      exchangeCache.setResultForInflight(cacheKey, inflight, verified, ttl);
       return verified;
     })().catch((err) => {
-      exchangeCache.clear(cacheKey);
+      exchangeCache.clearInflight(cacheKey, inflight);
       throw err;
     });
 
