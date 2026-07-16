@@ -50,8 +50,15 @@ describe("bearerToken", () => {
   it("requires a case-insensitive Bearer scheme", () => {
     assert.equal(bearerToken("Bearer sk_abc"), "sk_abc");
     assert.equal(bearerToken("bearer sk_abc"), "sk_abc");
+    assert.equal(bearerToken("Bearer   sk_abc"), "sk_abc");
     assert.equal(bearerToken("sk_abc"), "");
+    assert.equal(bearerToken("Bearer"), "");
+    assert.equal(bearerToken("Bearer\tsk_abc"), "");
     assert.equal(bearerToken(undefined), "");
+  });
+
+  it("handles long malformed input without regular-expression backtracking", () => {
+    assert.equal(bearerToken(`NotBearer ${"a".repeat(100_000)}`), "");
   });
 });
 
