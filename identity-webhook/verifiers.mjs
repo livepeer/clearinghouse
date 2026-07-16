@@ -58,8 +58,9 @@ function isLoopbackHost(hostname) {
 
 /**
  * Validate OIDC_TOKEN_EXCHANGE_BASE_URL: HTTPS required except loopback.
- * Must be an origin only — path/query/hash are rejected so a mis-set
- * `https://host/exchange` cannot silently become `https://host`.
+ * Must be an origin only — path/query/hash/userinfo are rejected so a mis-set
+ * `https://host/exchange` or `https://user:pass@host` cannot silently become
+ * `https://host`.
  * @param {string} baseUrl
  * @returns {string} normalized origin (no trailing slash)
  */
@@ -73,6 +74,11 @@ export function normalizeTokenExchangeBaseUrl(baseUrl) {
     url = new URL(trimmed);
   } catch {
     throw new Error(`tokenExchangeBaseUrl is not a valid URL: ${trimmed}`);
+  }
+  if (url.username || url.password) {
+    throw new Error(
+      `tokenExchangeBaseUrl must not include username or password; got ${trimmed}`,
+    );
   }
   const path = url.pathname.replace(/\/$/, "") || "/";
   if (path !== "/" || url.search || url.hash) {

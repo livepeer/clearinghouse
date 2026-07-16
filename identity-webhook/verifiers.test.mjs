@@ -608,6 +608,17 @@ describe("splitCompositeApiKey / normalizeTokenExchangeBaseUrl", () => {
       /origin only/,
     );
   });
+
+  it("rejects embedded username or password", () => {
+    assert.throws(
+      () => normalizeTokenExchangeBaseUrl("https://user:pass@billing.example.com"),
+      /must not include username or password/,
+    );
+    assert.throws(
+      () => normalizeTokenExchangeBaseUrl("https://user@billing.example.com"),
+      /must not include username or password/,
+    );
+  });
 });
 
 describe("createCompositeExchangeCache", () => {

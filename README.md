@@ -159,7 +159,7 @@ Shared keys (`WEBHOOK_SECRET`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`) are liste
 | `OIDC_SUBJECT_CLAIM` | `oidc`, optional | End-user claim (default `sub`; Auth0 clearinghouse uses `external_user_id`) |
 | `OIDC_SUBJECT_TYPE` | `oidc`, optional | Default `oidc_user`; Auth0 clearinghouse uses `external_user_id` |
 | `OIDC_REQUIRED_SCOPES` | `oidc`, optional | Space- or comma-separated required scopes (e.g. `sign:job`) |
-| `OIDC_TOKEN_EXCHANGE_BASE_URL` | `oidc`, optional | Origin only (no path/query/hash). Enables composite `Bearer app_<24hex>_<secret>`: RFC 8693 exchange at `/api/v1/apps/{clientId}/oidc/token`, then JWT verify (`RS256`/`ES256`, required `exp`, 60s clock skew) |
+| `OIDC_TOKEN_EXCHANGE_BASE_URL` | `oidc`, optional | Origin only (no path/query/hash/userinfo). HTTPS required except loopback (`localhost` / `127.0.0.1` / `::1`). Enables composite `Bearer app_<24hex>_<secret>`: RFC 8693 exchange at `/api/v1/apps/{clientId}/oidc/token`, then JWT verify (`RS256`/`ES256`, required `exp`, 60s clock skew) |
 | `OIDC_EXCHANGE_M2M_CLIENT_ID` / `OIDC_EXCHANGE_M2M_CLIENT_SECRET` | `oidc`, optional | Optional client credentials for the exchange request (both or neither) |
 
 OIDC JWT verification accepts only `RS256` and `ES256` (asymmetric algorithms). Tokens must include `exp` and the configured subject claim.
