@@ -952,7 +952,7 @@ describe("embedded OIDC issuer flow (handleAuthorize + createOidcVerifier)", () 
           seenIdentity = identity;
           return 5_000_000n;
         },
-        expiryTtlSeconds: 30,
+        expiryTtl: { seconds: 30 },
       }),
     };
 

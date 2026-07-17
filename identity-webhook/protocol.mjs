@@ -185,7 +185,8 @@ export async function handleAuthorize(request, config) {
         decision &&
         typeof decision.expiry === "number" &&
         Number.isFinite(decision.expiry) &&
-        Number.isInteger(decision.expiry)
+        Number.isInteger(decision.expiry) &&
+        decision.expiry >= 0
       ) {
         expiry = Math.min(expiry, decision.expiry);
       }
