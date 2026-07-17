@@ -4,6 +4,10 @@ import type {
   UsageIdentity,
 } from "./protocol.js";
 
+export type ExpiryTtl = Readonly<{
+  seconds: number;
+}>;
+
 export function parseUsdMicros(
   value: bigint | number | string | null | undefined,
 ): bigint | null;
@@ -20,7 +24,7 @@ export function createBalanceGate(options: {
     | null
     | undefined;
   minBalanceUsdMicros?: bigint | number | string;
-  expiryTtlSeconds?: number;
+  expiryTtl?: ExpiryTtl;
   failClosed?: boolean;
   onError?: (err: unknown, identity: UsageIdentity) => void;
 }): BalanceCheck;
