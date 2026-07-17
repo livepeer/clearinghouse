@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createBalanceGate } from "./balance-gate.mjs";
 import { routeWebhookRequest } from "./protocol.mjs";
 import { createEndUserVerifierFromEnv } from "./verifiers.mjs";
 
@@ -19,6 +20,20 @@ const config = {
   webhookSecret: required("WEBHOOK_SECRET"),
   endUserAuth,
 };
+
+// Optional compose/dev hook: DEMO_BALANCE_USD_MICROS enables createBalanceGate
+// against a fixed balance (e.g. "0" → 483, "5000000" → allow + reauth TTL).
+const demoBalance = process.env.DEMO_BALANCE_USD_MICROS?.trim();
+if (demoBalance !== undefined && demoBalance !== "") {
+  const reauthRaw = process.env.DEMO_BALANCE_REAUTH_TTL_SECONDS?.trim();
+  config.checkBalance = createBalanceGate({
+    getBalanceUsdMicros: async () => demoBalance,
+    reauthTtlSeconds: reauthRaw ? Number(reauthRaw) : 30,
+  });
+  console.log(
+    `identity-webhook: DEMO_BALANCE_USD_MICROS=${demoBalance} (live balance gate enabled)`,
+  );
+}
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
