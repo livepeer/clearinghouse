@@ -20,7 +20,7 @@ export function createBalanceGate(options: {
     | null
     | undefined;
   minBalanceUsdMicros?: bigint | number | string;
-  reauthTtlSeconds?: number;
+  expiryTtlSeconds?: number;
   failClosed?: boolean;
   onError?: (err: unknown, identity: UsageIdentity) => void;
 }): BalanceCheck;

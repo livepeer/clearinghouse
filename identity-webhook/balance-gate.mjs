@@ -19,7 +19,7 @@
  *   const checkBalance = createBalanceGate({
  *     getBalanceUsdMicros: async (identity) =>
  *       readLiveCreditBalanceUsdMicros(identity.client_id, identity.usage_subject),
- *     reauthTtlSeconds: 30, // re-check at least every 30s mid-stream
+ *     expiryTtlSeconds: 30, // sets webhook expiry = now + 30s (go-livepeer AuthExpiry cache)
  *   });
  *   return handleAuthorize(request, { webhookSecret, endUserAuth, checkBalance });
  */
@@ -68,9 +68,10 @@ export function parseUsdMicros(value) {
  *   Return null/undefined to signal "balance unknown" (see failClosed).
  * @param {bigint | number | string} [options.minBalanceUsdMicros=1]
  *   Minimum balance required to authorize (non-negative). Default: 1 micro.
- * @param {number} [options.reauthTtlSeconds]
- *   When set, caps the returned expiry to now + this (whole seconds), forcing
- *   go-livepeer to call back and re-check the balance at least this often.
+ * @param {number} [options.expiryTtlSeconds]
+ *   When set, sets the webhook response `expiry` to now + this many whole
+ *   seconds (also capped against the verifier expiry). go-livepeer stores that
+ *   as AuthExpiry and skips /authorize until it elapses.
  * @param {boolean} [options.failClosed=true]
  *   On lookup error or unknown balance: true → reject 503 billing_unavailable;
  *   false → allow (fail open).
@@ -81,7 +82,7 @@ export function parseUsdMicros(value) {
 export function createBalanceGate({
   getBalanceUsdMicros,
   minBalanceUsdMicros = 1n,
-  reauthTtlSeconds,
+  expiryTtlSeconds,
   failClosed = true,
   onError,
 } = {}) {
@@ -96,10 +97,10 @@ export function createBalanceGate({
     throw new TypeError("createBalanceGate: minBalanceUsdMicros must not be negative");
   }
   let ttl = null;
-  if (reauthTtlSeconds != null) {
-    ttl = Number(reauthTtlSeconds);
+  if (expiryTtlSeconds != null) {
+    ttl = Number(expiryTtlSeconds);
     if (!Number.isInteger(ttl) || ttl <= 0) {
-      throw new TypeError("createBalanceGate: reauthTtlSeconds must be a positive integer");
+      throw new TypeError("createBalanceGate: expiryTtlSeconds must be a positive integer");
     }
   }
 

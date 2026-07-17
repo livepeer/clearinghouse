@@ -48,7 +48,7 @@ describe("createBalanceGate", () => {
     assert.throws(() => createBalanceGate({}), /getBalanceUsdMicros is required/);
   });
 
-  it("validates minBalanceUsdMicros and reauthTtlSeconds", () => {
+  it("validates minBalanceUsdMicros and expiryTtlSeconds", () => {
     assert.throws(
       () => createBalanceGate({ getBalanceUsdMicros: async () => 0n, minBalanceUsdMicros: "x" }),
       /minBalanceUsdMicros must be an integer/,
@@ -62,12 +62,12 @@ describe("createBalanceGate", () => {
       /minBalanceUsdMicros must not be negative/,
     );
     assert.throws(
-      () => createBalanceGate({ getBalanceUsdMicros: async () => 0n, reauthTtlSeconds: 0 }),
-      /reauthTtlSeconds must be a positive integer/,
+      () => createBalanceGate({ getBalanceUsdMicros: async () => 0n, expiryTtlSeconds: 0 }),
+      /expiryTtlSeconds must be a positive integer/,
     );
     assert.throws(
-      () => createBalanceGate({ getBalanceUsdMicros: async () => 0n, reauthTtlSeconds: 1.5 }),
-      /reauthTtlSeconds must be a positive integer/,
+      () => createBalanceGate({ getBalanceUsdMicros: async () => 0n, expiryTtlSeconds: 1.5 }),
+      /expiryTtlSeconds must be a positive integer/,
     );
   });
 
@@ -112,10 +112,10 @@ describe("createBalanceGate", () => {
     assert.equal(seen.usage_subject, "user-1");
   });
 
-  it("caps expiry via reauthTtlSeconds", async () => {
+  it("caps expiry via expiryTtlSeconds", async () => {
     const gate = createBalanceGate({
       getBalanceUsdMicros: async () => 10n,
-      reauthTtlSeconds: 30,
+      expiryTtlSeconds: 30,
     });
     const before = Math.floor(Date.now() / 1000);
     const result = await gate(ctx());
