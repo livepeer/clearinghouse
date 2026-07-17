@@ -15,11 +15,13 @@
 .EXAMPLE
   .\bootstrap.ps1 customer demo-client demo-user "Demo User"
 .EXAMPLE
+  .\bootstrap.ps1 owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner"
+.EXAMPLE
   .\bootstrap.ps1 all demo-client demo-user "Demo User" -Subscribe
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('catalog', 'customer', 'all')]
+  [ValidateSet('catalog', 'customer', 'owner', 'all')]
   [string]$Command = 'catalog',
   [string]$ClientId,
   [string]$ExternalUserId,
@@ -256,30 +258,46 @@ function Invoke-Catalog {
 }
 
 # --- customer --------------------------------------------------------------
-function Ensure-Customer($clientId, $externalUserId, $display, $subscribe) {
-  if (-not $clientId -or -not $externalUserId) { Die 'customer requires <client_id> <external_user_id>' }
-  # CloudEvent subject = compound client_id:external_user_id = customer key = its only
-  # subject_key. OpenMeter forbids changing subject_keys on subscribed customers, so we
-  # set it at creation and never mutate it.
-  $compound = "$clientId`:$externalUserId"
-  if (-not $display) { $display = $compound }
+function Ensure-CustomerKey($key, $display, $subscribe, $label) {
+  if (-not $key) { Die 'customer key is required' }
+  if (-not $display) { $display = $key }
+  if (-not $label) { $label = $key }
 
-  $cust = Items (Kapi-Get '/customers') | Where-Object { $_.key -eq $compound } | Select-Object -First 1
+  $cust = Items (Kapi-Get '/customers') | Where-Object { $_.key -eq $key } | Select-Object -First 1
   if (-not $cust) {
-    $body = [ordered]@{ key = $compound; name = $display; usage_attribution = @{ subject_keys = @($compound) } }
+    $body = [ordered]@{ key = $key; name = $display; usage_attribution = @{ subject_keys = @($key) } }
     $created = Kapi-Send 'post' '/customers' ($body | ConvertTo-Json -Depth 5 -Compress)
     $id = $created.id
-    Info "customer $compound - created (subject: $compound)"
+    Info "customer $label - created (subject: $key)"
   }
   else {
     $id = $cust.id
-    if ($cust.usage_attribution.subject_keys -contains $compound) { Info "customer $compound - up to date" }
+    if ($cust.usage_attribution.subject_keys -contains $key) { Info "customer $label - up to date" }
     else {
-      Warn "customer $compound exists but its subject_keys do not include '$compound'"
+      Warn "customer $label exists but its subject_keys do not include '$key'"
       Warn "  (OpenMeter blocks subject_key changes on subscribed customers - reconcile manually)"
     }
   }
-  if ($subscribe) { Ensure-Subscription $id $compound }
+  if ($subscribe) { Ensure-Subscription $id $key }
+}
+
+function Ensure-OwnerCustomer($userId, $display, $subscribe) {
+  if (-not $userId) { Die 'owner requires <user_id>' }
+  if ($userId.StartsWith('owner:')) { $userId = $userId.Substring('owner:'.Length) }
+  if (-not $userId) { Die 'owner requires a non-empty <user_id>' }
+  Ensure-CustomerKey $userId $display $subscribe "owner:$userId"
+}
+
+function Ensure-Customer($clientId, $externalUserId, $display, $subscribe) {
+  if (-not $clientId -or -not $externalUserId) { Die 'customer requires <client_id> <external_user_id>' }
+  # App-owner wire subjects share one bare-{users.id} customer.
+  if ($externalUserId.StartsWith('owner:')) {
+    Ensure-OwnerCustomer $externalUserId $display $subscribe
+    return
+  }
+  # M2M / managed user: CloudEvent subject = compound client_id:external_user_id.
+  $compound = "$clientId`:$externalUserId"
+  Ensure-CustomerKey $compound $display $subscribe $compound
 }
 
 function Ensure-Subscription($customerId, $label) {
@@ -304,6 +322,12 @@ function Ensure-Subscription($customerId, $label) {
 switch ($Command) {
   'catalog' { Invoke-Catalog }
   'customer' { Ensure-Customer $ClientId $ExternalUserId $DisplayName $Subscribe.IsPresent }
+  'owner' {
+    # Positional: .\bootstrap.ps1 owner <user_id> ["Display Name"]
+    $uid = $ClientId
+    $display = if ($DisplayName) { $DisplayName } elseif ($ExternalUserId) { $ExternalUserId } else { $uid }
+    Ensure-OwnerCustomer $uid $display $Subscribe.IsPresent
+  }
   'all' { Invoke-Catalog; Ensure-Customer $ClientId $ExternalUserId $DisplayName $Subscribe.IsPresent }
 }
 Info 'done.'

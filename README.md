@@ -223,17 +223,19 @@ Three layers — each owns a different piece of the identity story:
 | Layer | What it defines | Role of `client_id:usage_subject` |
 | --- | --- | --- |
 | **go-livepeer** | Remote-signer webhook wire protocol ([PR #3897](https://github.com/livepeer/go-livepeer/pull/3897)): webhook returns an opaque `auth_id` string; signer stores it in payment state and copies it into Kafka `create_signed_ticket` events. | go-livepeer treats `auth_id` as an opaque string — it does not parse tenant vs end user. |
-| **Clearinghouse** | Multi-tenant usage identity: `client_id` = tenant (developer app), `usage_subject` = end user within that tenant. The identity webhook joins them as `auth_id = "{client_id}:{usage_subject}"` ([`protocol.mjs`](identity-webhook/protocol.mjs)). | This compound format is a clearinghouse convention so one shared signer can attribute usage across many platform apps and their users. |
-| **OpenMeter / Konnect** | CloudEvent `subject` is the customer attribution key; each customer has `subject_keys` that must match incoming events exactly. | Bootstrap provisions customers keyed by the same compound id (e.g. `demo-client:demo-user`). The collector sets CloudEvent `subject = auth_id` so usage lands on the right customer subscription. |
+| **Clearinghouse** | Multi-tenant usage identity: `client_id` = tenant (developer app), `usage_subject` = end user within that tenant. The identity webhook joins them as `auth_id = "{client_id}:{usage_subject}"` ([`protocol.mjs`](identity-webhook/protocol.mjs)). App owners use wire `usage_subject = owner:{users.id}` as a transport marker. | This compound format is a clearinghouse convention so one shared signer can attribute usage across many platform apps and their users. |
+| **OpenMeter / Konnect** | CloudEvent `subject` is the customer attribution key; each customer has `subject_keys` that must match incoming events exactly. | M2M customers are keyed by compound id (e.g. `demo-client:demo-user`). App owners share one customer keyed by bare `{users.id}`. The collector sets CloudEvent `subject` accordingly. |
 
 Upstream Kafka events carry `auth_id` unchanged (`webhook → go-livepeer state → Kafka`). The collector parses it once (first-colon split) and emits normalized CloudEvents ([`collector.yaml`](openmeter-collector/collector.yaml)):
 
-- `subject` = compound `auth_id` (`client_id:usage_subject`) — **must** match the OpenMeter customer `subject_key`; a bare `usage_subject` will not attribute
+- **M2M / managed user:** `subject` = compound `auth_id` (`client_id:usage_subject`)
+- **App owner:** wire `auth_id = client_id:owner:{users.id}` → `subject` = bare `{users.id}` (shared wallet); `usage_subject_type = app_owner`
 - `data.client_id` = tenant (parsed from `auth_id`)
-- `data.usage_subject` = end user (parsed from `auth_id`)
-- `data.auth_id` retained for compatibility; `data.external_user_id` mirrors `usage_subject` for meter `groupBy`
+- `data.usage_subject` / `data.external_user_id` = end user id, or bare `{users.id}` for owners
+- `data.auth_id` retained for compatibility; `data.openmeter_customer_key` = billing wallet key
+- `data.eth_usd_price` = ETH/USD oracle rate used for that event's Wei → USD micros conversion
 
-Example egress event for `auth_id = demo-client:demo-user`:
+Example egress event for M2M `auth_id = demo-client:demo-user`:
 
 ```json
 {
@@ -241,8 +243,26 @@ Example egress event for `auth_id = demo-client:demo-user`:
   "data": {
     "client_id": "demo-client",
     "usage_subject": "demo-user",
+    "usage_subject_type": "external_user_id",
     "external_user_id": "demo-user",
-    "auth_id": "demo-client:demo-user"
+    "auth_id": "demo-client:demo-user",
+    "openmeter_customer_key": "demo-client:demo-user"
+  }
+}
+```
+
+Example egress event for app owner `auth_id = app_abc:owner:2e51154b-d296-4015-990c-02d5f16ecf1e`:
+
+```json
+{
+  "subject": "2e51154b-d296-4015-990c-02d5f16ecf1e",
+  "data": {
+    "client_id": "app_abc",
+    "usage_subject": "2e51154b-d296-4015-990c-02d5f16ecf1e",
+    "usage_subject_type": "app_owner",
+    "external_user_id": "2e51154b-d296-4015-990c-02d5f16ecf1e",
+    "auth_id": "app_abc:owner:2e51154b-d296-4015-990c-02d5f16ecf1e",
+    "openmeter_customer_key": "2e51154b-d296-4015-990c-02d5f16ecf1e"
   }
 }
 ```

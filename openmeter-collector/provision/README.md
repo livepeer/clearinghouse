@@ -45,8 +45,11 @@ cd openmeter-collector/provision
 # Catalog only — ensure meters, features, and the active plan.
 ./bootstrap.sh catalog
 
-# Provision one tenant customer (key = client_id:external_user_id).
+# Provision one M2M / managed-user customer (key = client_id:external_user_id).
 ./bootstrap.sh customer demo-client demo-user "Demo User"
+
+# Provision a shared app-owner customer (key = bare {users.id}).
+./bootstrap.sh owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner"
 
 # Catalog + customer in one run; --subscribe also ensures a plan subscription.
 ./bootstrap.sh all demo-client demo-user "Demo User" --subscribe
@@ -57,6 +60,7 @@ Windows (PowerShell):
 ```powershell
 .\bootstrap.ps1 catalog
 .\bootstrap.ps1 customer demo-client demo-user "Demo User"
+.\bootstrap.ps1 owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner"
 .\bootstrap.ps1 all demo-client demo-user "Demo User" -Subscribe
 ```
 
@@ -78,14 +82,21 @@ From [`catalog.json`](catalog.json):
 
 ## Identity contract (important)
 
-The CloudEvent **`subject` is the compound `client_id:external_user_id`** (e.g.
-`demo-client:demo-user`), which is also the customer key and its single `subject_key`.
-OpenMeter attributes usage by exact subject match, and **forbids changing a customer's
-`subject_keys` once it has an active subscription** — so the subject must be compound and
-correct from creation. Break usage down per-tenant/user with the `client_id` / `external_user_id`
-meter dimensions, not by changing the subject. The scripts therefore never mutate
-`subject_keys` on existing customers; they warn if an existing customer is missing the
-expected compound key.
+OpenMeter attributes usage by exact CloudEvent `subject` match, and **forbids changing a
+customer's `subject_keys` once it has an active subscription** — so the key must be
+correct from creation. Two customer shapes:
+
+| Caller | Wire `auth_id` | CloudEvent `subject` / customer key |
+| --- | --- | --- |
+| **M2M / managed user** | `client_id:external_user_id` | compound `client_id:external_user_id` |
+| **App owner** | `client_id:owner:{users.id}` | bare `{users.id}` (shared wallet) |
+
+The webhook stamps `owner:` as a **transport marker**; the collector strips it before
+egress. Break usage down per-tenant/user with the `client_id` / `external_user_id` meter
+dimensions, not by changing the subject. The scripts never mutate `subject_keys` on
+existing customers; they warn if an existing customer is missing the expected key.
+
+See also [`../identity`](../identity) (Go helpers + unit tests for this contract).
 
 ## Limitations
 

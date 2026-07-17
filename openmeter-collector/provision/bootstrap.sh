@@ -17,7 +17,13 @@
 #   ./bootstrap.sh customer <client_id> <external_user_id> [display_name] [--subscribe]
 #       Ensure an OpenMeter customer keyed <client_id>:<external_user_id> exists with
 #       subject_keys = [<client_id>:<external_user_id>] (matches the CloudEvent subject).
+#       M2M / managed users only. If external_user_id starts with owner:, delegates to
+#       the owner command (bare {users.id} customer key).
 #       --subscribe also ensures a subscription on the catalog plan (best-effort).
+#
+#   ./bootstrap.sh owner <user_id> [display_name] [--subscribe]
+#       Ensure a shared app-owner customer keyed by bare {users.id} (CloudEvent subject
+#       after the collector strips the owner: wire prefix from auth_id).
 #
 #   ./bootstrap.sh all <client_id> <external_user_id> [display_name] [--subscribe]
 #       catalog + customer in one run.
@@ -304,35 +310,58 @@ find_customer() {
   kapi_get "/customers" | jq -c --arg k "$1" '(.data // .)[] | select(.key == $k)' | head -n 1
 }
 
-ensure_customer() {
-  local client_id="$1" external_user_id="$2" display="$3" subscribe="$4"
-  [ -n "$client_id" ] && [ -n "$external_user_id" ] || die "customer requires <client_id> <external_user_id>"
-  # The CloudEvent subject is the compound client_id:external_user_id (globally
-  # unique, tenant-scoped). It is also the customer key and its only subject_key.
-  # OpenMeter forbids changing subject_keys once a customer has an active
-  # subscription, so we set it correctly at creation and never mutate it.
-  local compound="$client_id:$external_user_id"
-  [ -n "$display" ] || display="$compound"
+# Create/ensure a customer with exact key + subject_keys = [key]. Never mutates
+# subject_keys on existing records (OpenMeter forbids changes once subscribed).
+ensure_customer_key() {
+  local key="$1" display="$2" subscribe="$3" label="${4:-$1}"
+  [ -n "$key" ] || die "customer key is required"
+  [ -n "$display" ] || display="$key"
 
-  local cust; cust="$(find_customer "$compound")"
+  local cust; cust="$(find_customer "$key")"
   local id
   if [ -z "$cust" ]; then
     local body
-    body="$(jq -n --arg key "$compound" --arg name "$display" \
+    body="$(jq -n --arg key "$key" --arg name "$display" \
       '{key:$key, name:$name, usage_attribution:{subject_keys:[$key]}}')"
     id="$(printf '%s' "$body" | kapi_post /customers | jq -r '.id')"
-    info "customer $compound — created (subject: $compound)"
+    info "customer $label — created (subject: $key)"
   else
     id="$(jq -r '.id' <<<"$cust")"
-    if jq -e --arg c "$compound" '(.usage_attribution.subject_keys // []) | index($c)' <<<"$cust" >/dev/null; then
-      info "customer $compound — up to date"
+    if jq -e --arg c "$key" '(.usage_attribution.subject_keys // []) | index($c)' <<<"$cust" >/dev/null; then
+      info "customer $label — up to date"
     else
-      warn "customer $compound exists but its subject_keys do not include '$compound'"
+      warn "customer $label exists but its subject_keys do not include '$key'"
       warn "  (OpenMeter blocks subject_key changes on subscribed customers — reconcile manually)"
     fi
   fi
 
-  [ "$subscribe" = "1" ] && ensure_subscription "$id" "$compound" || true
+  [ "$subscribe" = "1" ] && ensure_subscription "$id" "$key" || true
+}
+
+ensure_owner_customer() {
+  local user_id="$1" display="$2" subscribe="$3"
+  [ -n "$user_id" ] || die "owner requires <user_id>"
+  # Strip accidental owner: prefix so the key is always the bare {users.id}.
+  case "$user_id" in
+    owner:*) user_id="${user_id#owner:}" ;;
+  esac
+  [ -n "$user_id" ] || die "owner requires a non-empty <user_id>"
+  ensure_customer_key "$user_id" "$display" "$subscribe" "owner:$user_id"
+}
+
+ensure_customer() {
+  local client_id="$1" external_user_id="$2" display="$3" subscribe="$4"
+  [ -n "$client_id" ] && [ -n "$external_user_id" ] || die "customer requires <client_id> <external_user_id>"
+  # App-owner wire subjects (owner:{users.id}) share one bare-id customer.
+  case "$external_user_id" in
+    owner:*)
+      ensure_owner_customer "$external_user_id" "$display" "$subscribe"
+      return
+      ;;
+  esac
+  # M2M / managed user: CloudEvent subject = compound client_id:external_user_id.
+  local compound="$client_id:$external_user_id"
+  ensure_customer_key "$compound" "$display" "$subscribe" "$compound"
 }
 
 # Best-effort subscription on the catalog plan. Skips if the customer already has one.
@@ -377,12 +406,15 @@ case "$cmd" in
   customer)
     ensure_customer "${1:-}" "${2:-}" "${3:-}" "$SUBSCRIBE"
     ;;
+  owner)
+    ensure_owner_customer "${1:-}" "${2:-}" "$SUBSCRIBE"
+    ;;
   all)
     cmd_catalog
     ensure_customer "${1:-}" "${2:-}" "${3:-}" "$SUBSCRIBE"
     ;;
   *)
-    die "unknown command '$cmd' (expected: catalog | customer | all)"
+    die "unknown command '$cmd' (expected: catalog | customer | owner | all)"
     ;;
 esac
 info "done."
