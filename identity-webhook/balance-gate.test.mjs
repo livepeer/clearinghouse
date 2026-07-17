@@ -31,6 +31,15 @@ describe("parseUsdMicros", () => {
     assert.equal(parseUsdMicros("1.5"), null);
     assert.equal(parseUsdMicros("abc"), null);
     assert.equal(parseUsdMicros(1.5), null);
+    assert.equal(parseUsdMicros(Number.MAX_SAFE_INTEGER + 1), null);
+    assert.equal(parseUsdMicros(Number.POSITIVE_INFINITY), null);
+    assert.equal(parseUsdMicros(Number.NaN), null);
+  });
+
+  it("accepts large balances via string or bigint", () => {
+    const big = "9007199254740993"; // MAX_SAFE_INTEGER + 2
+    assert.equal(parseUsdMicros(big), BigInt(big));
+    assert.equal(parseUsdMicros(BigInt(big)), BigInt(big));
   });
 });
 
@@ -46,7 +55,11 @@ describe("createBalanceGate", () => {
     );
     assert.throws(
       () => createBalanceGate({ getBalanceUsdMicros: async () => 0n, reauthTtlSeconds: 0 }),
-      /reauthTtlSeconds must be a positive number/,
+      /reauthTtlSeconds must be a positive integer/,
+    );
+    assert.throws(
+      () => createBalanceGate({ getBalanceUsdMicros: async () => 0n, reauthTtlSeconds: 1.5 }),
+      /reauthTtlSeconds must be a positive integer/,
     );
   });
 
