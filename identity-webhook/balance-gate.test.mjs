@@ -54,6 +54,14 @@ describe("createBalanceGate", () => {
       /minBalanceUsdMicros must be an integer/,
     );
     assert.throws(
+      () => createBalanceGate({ getBalanceUsdMicros: async () => 0n, minBalanceUsdMicros: -1 }),
+      /minBalanceUsdMicros must not be negative/,
+    );
+    assert.throws(
+      () => createBalanceGate({ getBalanceUsdMicros: async () => 0n, minBalanceUsdMicros: "-5" }),
+      /minBalanceUsdMicros must not be negative/,
+    );
+    assert.throws(
       () => createBalanceGate({ getBalanceUsdMicros: async () => 0n, reauthTtlSeconds: 0 }),
       /reauthTtlSeconds must be a positive integer/,
     );
