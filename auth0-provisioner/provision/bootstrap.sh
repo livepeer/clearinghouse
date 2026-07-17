@@ -88,6 +88,7 @@ resolve_auth0_cli
 ensure_auth0_session
 
 # --- auth0 api helpers (Management API v2 passthrough; JSON body on stdout) ---
+urlencode()   { jq -rn --arg s "$1" '$s|@uri'; }
 aapi_get()    { "$AUTH0_BIN" api get    "$1"; }
 aapi_post()   { printf '%s' "$2" | "$AUTH0_BIN" api post  "$1"; }
 aapi_patch()  { printf '%s' "$2" | "$AUTH0_BIN" api patch "$1"; }
@@ -176,9 +177,14 @@ client_secret() {
 # --- client grants ---------------------------------------------------------
 # Sets ENSURED_GRANT_ID and ENSURED_GRANT_CREATED (0=reused, 1=created). Returns 1 on failure.
 ensure_client_grant() {
-  local client_id="$1" audience="$2" scopes_json="$3" gid body resp
+  local client_id="$1" audience="$2" scopes_json="$3" gid body resp grants n
   ENSURED_GRANT_CREATED=0
-  gid="$(aapi_get "client-grants?client_id=${client_id}" | jq -r --arg a "$audience" '[.[] | select(.audience==$a) | .id] | first // empty')"
+  # audience is a URI; percent-encode both filters per RFC 3986 so the Management
+  # API returns the exact (client_id, audience) grant instead of a mismatch.
+  grants="$(aapi_get "client-grants?client_id=$(urlencode "$client_id")&audience=$(urlencode "$audience")")" || return 1
+  n="$(jq 'length' <<<"$grants")" || return 1
+  [ "$n" -le 1 ] || die "found $n client grants for ($client_id -> $audience); reconcile the duplicates in Auth0 and re-run"
+  gid="$(jq -r '.[0].id // empty' <<<"$grants")"
   if [ -n "$gid" ]; then
     body="$(jq -nc --argjson s "$scopes_json" '{scope: $s}')" || return 1
     aapi_patch "client-grants/$gid" "$body" >/dev/null || return 1

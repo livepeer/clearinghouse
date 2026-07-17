@@ -16,8 +16,12 @@ KAFKA_GATEWAY_TOPIC="${KAFKA_GATEWAY_TOPIC:-livepeer-gateway-events}"
 
 if [ -n "${SIGNER_ETH_PASSWORD:-}" ]; then
   printf '%s' "$SIGNER_ETH_PASSWORD" >/data/.eth-password
-elif [ ! -f /data/.eth-password ]; then
-  echo "" >/data/.eth-password
+  echo "entrypoint: wrote keystore password from SIGNER_ETH_PASSWORD" >&2
+elif [ -f /data/.eth-password ]; then
+  echo "entrypoint: using keystore password from /data/.eth-password" >&2
+else
+  echo "entrypoint: no keystore password — set SIGNER_ETH_PASSWORD or mount /data/.eth-password" >&2
+  exit 1
 fi
 
 if [ -z "${SIGNER_ETH_KEYSTORE_PATH:-}" ] && [ -d /data/keystore ]; then
