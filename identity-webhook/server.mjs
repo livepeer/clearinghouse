@@ -26,9 +26,18 @@ const config = {
 const demoBalance = process.env.DEMO_BALANCE_USD_MICROS?.trim();
 if (demoBalance !== undefined && demoBalance !== "") {
   const reauthRaw = process.env.DEMO_BALANCE_REAUTH_TTL_SECONDS?.trim();
+  let reauthTtlSeconds = 30;
+  if (reauthRaw) {
+    reauthTtlSeconds = Number(reauthRaw);
+    if (!Number.isInteger(reauthTtlSeconds) || reauthTtlSeconds <= 0) {
+      throw new Error(
+        `DEMO_BALANCE_REAUTH_TTL_SECONDS must be a positive integer (got ${JSON.stringify(reauthRaw)})`,
+      );
+    }
+  }
   config.checkBalance = createBalanceGate({
     getBalanceUsdMicros: async () => demoBalance,
-    reauthTtlSeconds: reauthRaw ? Number(reauthRaw) : 30,
+    reauthTtlSeconds,
   });
   console.log(
     `identity-webhook: DEMO_BALANCE_USD_MICROS=${demoBalance} (live balance gate enabled)`,

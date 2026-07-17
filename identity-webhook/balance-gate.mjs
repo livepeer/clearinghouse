@@ -67,7 +67,7 @@ export function parseUsdMicros(value) {
  *   Resolve remaining balance (USD micros) for the identity. May be async.
  *   Return null/undefined to signal "balance unknown" (see failClosed).
  * @param {bigint | number | string} [options.minBalanceUsdMicros=1]
- *   Minimum balance required to authorize. Default: 1 micro (any positive credit).
+ *   Minimum balance required to authorize (non-negative). Default: 1 micro.
  * @param {number} [options.reauthTtlSeconds]
  *   When set, caps the returned expiry to now + this (whole seconds), forcing
  *   go-livepeer to call back and re-check the balance at least this often.
@@ -91,6 +91,9 @@ export function createBalanceGate({
   const minBalance = parseUsdMicros(minBalanceUsdMicros);
   if (minBalance === null) {
     throw new TypeError("createBalanceGate: minBalanceUsdMicros must be an integer");
+  }
+  if (minBalance < 0n) {
+    throw new TypeError("createBalanceGate: minBalanceUsdMicros must not be negative");
   }
   let ttl = null;
   if (reauthTtlSeconds != null) {
