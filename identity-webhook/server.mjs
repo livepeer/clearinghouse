@@ -22,22 +22,22 @@ const config = {
 };
 
 // Optional compose/dev hook: DEMO_BALANCE_USD_MICROS enables createBalanceGate
-// against a fixed balance (e.g. "0" → 483, "5000000" → allow + reauth TTL).
+// against a fixed balance (e.g. "0" → 483, "5000000" → allow + expiry TTL).
 const demoBalance = process.env.DEMO_BALANCE_USD_MICROS?.trim();
 if (demoBalance !== undefined && demoBalance !== "") {
-  const reauthRaw = process.env.DEMO_BALANCE_REAUTH_TTL_SECONDS?.trim();
-  let reauthTtlSeconds = 30;
-  if (reauthRaw) {
-    reauthTtlSeconds = Number(reauthRaw);
-    if (!Number.isInteger(reauthTtlSeconds) || reauthTtlSeconds <= 0) {
+  const expiryTtlRaw = process.env.DEMO_BALANCE_EXPIRY_TTL_SECONDS?.trim();
+  let expiryTtlSeconds = 30;
+  if (expiryTtlRaw) {
+    expiryTtlSeconds = Number(expiryTtlRaw);
+    if (!Number.isInteger(expiryTtlSeconds) || expiryTtlSeconds <= 0) {
       throw new Error(
-        `DEMO_BALANCE_REAUTH_TTL_SECONDS must be a positive integer (got ${JSON.stringify(reauthRaw)})`,
+        `DEMO_BALANCE_EXPIRY_TTL_SECONDS must be a positive integer (got ${JSON.stringify(expiryTtlRaw)})`,
       );
     }
   }
   config.checkBalance = createBalanceGate({
     getBalanceUsdMicros: async () => demoBalance,
-    reauthTtlSeconds,
+    expiryTtlSeconds,
   });
   console.log(
     `identity-webhook: DEMO_BALANCE_USD_MICROS=${demoBalance} (live balance gate enabled)`,
