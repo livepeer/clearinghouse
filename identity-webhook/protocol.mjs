@@ -181,7 +181,12 @@ export async function handleAuthorize(request, config) {
         payload,
         request,
       });
-      if (decision && typeof decision.expiry === "number") {
+      if (
+        decision &&
+        typeof decision.expiry === "number" &&
+        Number.isFinite(decision.expiry) &&
+        Number.isInteger(decision.expiry)
+      ) {
         expiry = Math.min(expiry, decision.expiry);
       }
     }

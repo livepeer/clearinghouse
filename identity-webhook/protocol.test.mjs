@@ -232,6 +232,16 @@ describe("handleAuthorize checkBalance hook", () => {
     assert.equal((await res.json()).expiry, 1234567890);
   });
 
+  it("ignores non-finite or non-integer checkBalance expiry values", async () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 12.5]) {
+      const res = await handleAuthorize(authorizeRequest({ body: goodBody }), {
+        ...config,
+        checkBalance: async () => ({ expiry: bad }),
+      });
+      assert.equal((await res.json()).expiry, 1234567890);
+    }
+  });
+
   it("allows the request when checkBalance returns nothing", async () => {
     const res = await handleAuthorize(authorizeRequest({ body: goodBody }), {
       ...config,

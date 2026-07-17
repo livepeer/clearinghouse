@@ -10,11 +10,11 @@
  * a mint-time-only gate leaves open.
  *
  * Balances are USD micros (1 USD = 1_000_000 micros), accepted as bigint,
- * integer number, or integer string.
+ * safe integer number, or integer string.
  *
- * Example:
- *   import { handleAuthorize } from "@livepeer/clearinghouse-identity-webhook/protocol";
- *   import { createBalanceGate } from "@livepeer/clearinghouse-identity-webhook/balance-gate";
+ * Example (in-repo relative imports; published package exports may differ):
+ *   import { handleAuthorize } from "./protocol.mjs";
+ *   import { createBalanceGate } from "./balance-gate.mjs";
  *
  *   const checkBalance = createBalanceGate({
  *     getBalanceUsdMicros: async (identity) =>
@@ -34,15 +34,16 @@ function nowSeconds() {
 }
 
 /**
- * Coerce a USD-micros balance (bigint | integer number | integer string) to a
- * bigint. Returns null for anything non-integer (including "1.5", "", null).
+ * Coerce a USD-micros balance (bigint | safe integer number | integer string)
+ * to a bigint. Returns null for anything non-integer (including "1.5", "", null).
+ * Numbers outside Number.MAX_SAFE_INTEGER must be passed as string or bigint.
  */
 export function parseUsdMicros(value) {
   if (typeof value === "bigint") {
     return value;
   }
   if (typeof value === "number") {
-    return Number.isInteger(value) ? BigInt(value) : null;
+    return Number.isSafeInteger(value) ? BigInt(value) : null;
   }
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -62,20 +63,20 @@ export function parseUsdMicros(value) {
  * Build a `checkBalance` hook from a balance lookup.
  *
  * @param {object} options
- * @param {(identity: import("./protocol.js").UsageIdentity, ctx: import("./protocol.js").BalanceCheckContext) => any} options.getBalanceUsdMicros
+ * @param {(identity: import("./protocol.mjs").UsageIdentity, ctx: import("./protocol.mjs").BalanceCheckContext) => any} options.getBalanceUsdMicros
  *   Resolve remaining balance (USD micros) for the identity. May be async.
  *   Return null/undefined to signal "balance unknown" (see failClosed).
  * @param {bigint | number | string} [options.minBalanceUsdMicros=1]
  *   Minimum balance required to authorize. Default: 1 micro (any positive credit).
  * @param {number} [options.reauthTtlSeconds]
- *   When set, caps the returned expiry to now + this, forcing go-livepeer to
- *   call back and re-check the balance at least this often.
+ *   When set, caps the returned expiry to now + this (whole seconds), forcing
+ *   go-livepeer to call back and re-check the balance at least this often.
  * @param {boolean} [options.failClosed=true]
  *   On lookup error or unknown balance: true → reject 503 billing_unavailable;
  *   false → allow (fail open).
- * @param {(err: unknown, identity: import("./protocol.js").UsageIdentity) => void} [options.onError]
+ * @param {(err: unknown, identity: import("./protocol.mjs").UsageIdentity) => void} [options.onError]
  *   Optional hook to observe lookup errors / unparseable balances.
- * @returns {import("./protocol.js").BalanceCheck}
+ * @returns {import("./protocol.mjs").BalanceCheck}
  */
 export function createBalanceGate({
   getBalanceUsdMicros,
@@ -94,8 +95,8 @@ export function createBalanceGate({
   let ttl = null;
   if (reauthTtlSeconds != null) {
     ttl = Number(reauthTtlSeconds);
-    if (!Number.isFinite(ttl) || ttl <= 0) {
-      throw new TypeError("createBalanceGate: reauthTtlSeconds must be a positive number");
+    if (!Number.isInteger(ttl) || ttl <= 0) {
+      throw new TypeError("createBalanceGate: reauthTtlSeconds must be a positive integer");
     }
   }
 
