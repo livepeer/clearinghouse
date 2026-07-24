@@ -94,9 +94,20 @@ jobs:
           } catch {
             versions = [];
           }
-          const stables = versions.filter((v) => !String(v).includes("-"));
-          const latest = stables.at(-1) || "0.0.0";
-          const [maj, min, pat] = latest.split(".").map(Number);
+          const parseStable = (v) => {
+            const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(v));
+            return m
+              ? { maj: Number(m[1]), min: Number(m[2]), pat: Number(m[3]) }
+              : null;
+          };
+          const cmpStable = (a, b) =>
+            a.maj - b.maj || a.min - b.min || a.pat - b.pat;
+          const stables = versions
+            .map(parseStable)
+            .filter(Boolean)
+            .sort(cmpStable);
+          const latestParts = stables.at(-1) || { maj: 0, min: 0, pat: 0 };
+          const { maj, min, pat } = latestParts;
           let nextMaj = maj;
           let nextMin = min;
           let nextPat = pat;

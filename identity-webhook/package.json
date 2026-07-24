@@ -12,6 +12,11 @@
     "prepack": "npm test"
   },
   "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs",
+      "default": "./index.mjs"
+    },
     "./protocol": {
       "types": "./protocol.d.ts",
       "import": "./protocol.mjs",
@@ -24,6 +29,8 @@
     }
   },
   "files": [
+    "index.mjs",
+    "index.d.ts",
     "protocol.mjs",
     "protocol.d.ts",
     "verifiers.mjs",
