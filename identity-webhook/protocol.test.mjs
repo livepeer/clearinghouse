@@ -47,11 +47,23 @@ const fakeVerifier = {
 const config = { webhookSecret: SECRET, endUserAuth: fakeVerifier };
 
 describe("bearerToken", () => {
-  it("strips a case-insensitive Bearer prefix", () => {
+  it("requires a case-insensitive Bearer scheme", () => {
     assert.equal(bearerToken("Bearer sk_abc"), "sk_abc");
     assert.equal(bearerToken("bearer sk_abc"), "sk_abc");
-    assert.equal(bearerToken("sk_abc"), "sk_abc");
+    assert.equal(bearerToken("Bearer   sk_abc"), "sk_abc");
+    assert.equal(bearerToken("sk_abc"), "");
+    assert.equal(bearerToken("Bearer"), "");
+    assert.equal(bearerToken("Bearer\tsk_abc"), "");
     assert.equal(bearerToken(undefined), "");
+  });
+
+  it("rejects tokens with internal whitespace (RFC 6750 b64token)", () => {
+    assert.equal(bearerToken("Bearer a b"), "");
+    assert.equal(bearerToken("Bearer sk_abc extra"), "");
+  });
+
+  it("handles long malformed input without regular-expression backtracking", () => {
+    assert.equal(bearerToken(`NotBearer ${"a".repeat(100_000)}`), "");
   });
 });
 
