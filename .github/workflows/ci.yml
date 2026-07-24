@@ -51,10 +51,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       # `benthos test ./collector.yaml` auto-discovers companion
       # collector_benthos_test.yaml (same stem + _benthos_test suffix).
+      # Image tag must match openmeter-collector/Dockerfile (not :latest).
       - name: Benthos unit tests (identity + fee mapping)
         run: |
           docker run --rm \
             -v "$PWD:/work:ro" \
             -w /work \
-            ghcr.io/openmeterio/benthos-collector:latest \
+            ghcr.io/openmeterio/benthos-collector:main-6b60ab6-1782310960 \
             test --verbose ./collector.yaml ./collector_benthos_test.yaml
