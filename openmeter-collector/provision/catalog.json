@@ -1,10 +1,10 @@
 {
-  "$comment": "OpenMeter/Konnect metering catalog for the clearinghouse collector. Provisioned idempotently by bootstrap.sh / bootstrap.ps1. Meters are immutable in OpenMeter — the scripts only create missing entries, they never update or delete. Dimensions/value_property must match the CloudEvent fields emitted by openmeter-collector/collector.yaml.",
+  "$comment": "OpenMeter/Konnect metering catalog for the clearinghouse collector. Aligned with pymthouse v0.3.3: Starter plans settle on network_spend (network_fee_usd_micros) via credit_then_invoice + discounts.usage included allowance; prepaid credits are manual top-ups only (not auto-granted here). billable_usd_micros / billable_spend remain for phase-2 markup and are not on Starter rate cards. Analytics meters need collector fields from the owner-identity / fee-mapping PR. Provisioned idempotently by bootstrap.sh / bootstrap.ps1 — meters are immutable (create-only).",
   "meters": [
     {
       "key": "network_fee_usd_micros",
       "name": "Network fee (USD micros)",
-      "description": "Raw network cost in USD micros from the signer (observability).",
+      "description": "Settlement + observability: exact fractional USD micros from fee_wei * eth_usd / 1e12 (no per-ticket ceil).",
       "event_type": "create_signed_ticket",
       "aggregation": "sum",
       "value_property": "$.network_fee_usd_micros",
@@ -18,7 +18,7 @@
     {
       "key": "billable_usd_micros",
       "name": "Billable usage (USD micros)",
-      "description": "Post-markup billable amount in USD micros for pay-per-use billing. Not emitted by the collector until phase-2 markup; meter stays empty until then.",
+      "description": "Phase-2 post-markup billable amount. Not on Starter plans; collector may emit interim passthrough equal to network fee.",
       "event_type": "create_signed_ticket",
       "aggregation": "sum",
       "value_property": "$.billable_usd_micros",
@@ -41,6 +41,51 @@
         "model_id": "$.model_id",
         "pipeline": "$.pipeline"
       }
+    },
+    {
+      "key": "fee_wei",
+      "name": "Fee (wei)",
+      "description": "Analytics: raw network fee in wei.",
+      "event_type": "create_signed_ticket",
+      "aggregation": "sum",
+      "value_property": "$.fee_wei",
+      "dimensions": {
+        "client_id": "$.client_id",
+        "external_user_id": "$.external_user_id",
+        "model_id": "$.model_id",
+        "pipeline": "$.pipeline",
+        "manifest_id": "$.manifest_id"
+      }
+    },
+    {
+      "key": "billable_secs",
+      "name": "Billable seconds",
+      "description": "Analytics: billable session seconds.",
+      "event_type": "create_signed_ticket",
+      "aggregation": "sum",
+      "value_property": "$.billable_secs",
+      "dimensions": {
+        "client_id": "$.client_id",
+        "external_user_id": "$.external_user_id",
+        "model_id": "$.model_id",
+        "pipeline": "$.pipeline",
+        "manifest_id": "$.manifest_id"
+      }
+    },
+    {
+      "key": "network_fee_usd_micros_by_manifest",
+      "name": "Network fee by manifest (USD micros)",
+      "description": "Analytics: network fee rolled up per manifest/session.",
+      "event_type": "create_signed_ticket",
+      "aggregation": "sum",
+      "value_property": "$.network_fee_usd_micros",
+      "dimensions": {
+        "client_id": "$.client_id",
+        "external_user_id": "$.external_user_id",
+        "model_id": "$.model_id",
+        "pipeline": "$.pipeline",
+        "manifest_id": "$.manifest_id"
+      }
     }
   ],
   "features": [
@@ -55,29 +100,74 @@
       "meter_key": "billable_usd_micros"
     }
   ],
-  "plan": {
-    "key": "clearinghouse_default_ppu",
-    "name": "Clearinghouse default pay-per-use",
-    "description": "Default pay-per-use plan billed on billable_usd_micros usage (1 USD micro = $0.000001).",
-    "currency": "USD",
-    "billing_cadence": "P1M",
-    "phases": [
-      {
-        "key": "default",
-        "name": "Default",
-        "rate_cards": [
-          {
-            "key": "billable_spend",
-            "name": "Billable spend",
-            "feature_key": "billable_spend",
-            "billing_cadence": "P1M",
-            "price": {
-              "type": "unit",
-              "amount": "0.000001"
+  "plans": [
+    {
+      "key": "clearinghouse_owner_starter",
+      "subscribe_role": "owner",
+      "name": "Clearinghouse Owner Starter",
+      "description": "Shared app-owner wallet Starter: network_spend with included discounts.usage ($5 default). Matches pymthouse_owner_starter semantics.",
+      "currency": "USD",
+      "billing_cadence": "P1M",
+      "settlement_mode": "credit_then_invoice",
+      "metadata": {
+        "plan_kind": "owner_starter",
+        "meter_slug": "network_fee_usd_micros"
+      },
+      "phases": [
+        {
+          "key": "default",
+          "name": "Default",
+          "rate_cards": [
+            {
+              "key": "network_spend",
+              "name": "Network usage",
+              "feature_key": "network_spend",
+              "billing_cadence": "P1M",
+              "price": {
+                "type": "unit",
+                "amount": "0.000001"
+              },
+              "discounts": {
+                "usage": "5000000"
+              }
             }
-          }
-        ]
-      }
-    ]
-  }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "clearinghouse_demo_starter",
+      "subscribe_role": "m2m",
+      "name": "Clearinghouse Demo Starter",
+      "description": "Demo M2M / managed-user Starter: same network_spend + discounts.usage shape as Owner Starter (local/demo stand-in for per-app Starter plans).",
+      "currency": "USD",
+      "billing_cadence": "P1M",
+      "settlement_mode": "credit_then_invoice",
+      "metadata": {
+        "plan_kind": "demo_starter",
+        "meter_slug": "network_fee_usd_micros"
+      },
+      "phases": [
+        {
+          "key": "default",
+          "name": "Default",
+          "rate_cards": [
+            {
+              "key": "network_spend",
+              "name": "Network usage",
+              "feature_key": "network_spend",
+              "billing_cadence": "P1M",
+              "price": {
+                "type": "unit",
+                "amount": "0.000001"
+              },
+              "discounts": {
+                "usage": "5000000"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
 }

@@ -182,43 +182,52 @@ To change the host signing port or bind on all interfaces, use a Compose overrid
 
 ## OpenMeter/Konnect bootstrap
 
-Provision meters, features, and the default pay-per-use plan before starting the collector.
+Provision meters, features, and Starter plans before starting the collector.
 Use the [`kongctl` bootstrap scripts](openmeter-collector/provision/README.md) or your existing Konnect setup.
+
+Aligned with pymthouse v0.3.3: Starter settles on **`network_spend`** with included
+**`discounts.usage`** ($5 default) and **`credit_then_invoice`**. Prepaid credits are
+manual top-ups only.
 
 ```bash
 cd openmeter-collector/provision
 ./bootstrap.sh catalog
-./bootstrap.sh customer demo-client demo-user "Demo User"
+./bootstrap.sh customer demo-client demo-user "Demo User" --subscribe
+./bootstrap.sh owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner" --subscribe
 ```
 
 Creates:
 
 | Object | Key | Purpose |
 | --- | --- | --- |
-| Meter | `network_fee_usd_micros` | Raw network cost from signer |
-| Meter | `billable_usd_micros` | Post-markup billable amount (collector phase 2) |
+| Meter | `network_fee_usd_micros` | Settlement + observability (network cost) |
+| Meter | `billable_usd_micros` | Phase-2 markup (not on Starter plans) |
 | Meter | `signed_ticket_count` | Request counts |
-| Feature | `network_spend` | Trial/network spend feature |
-| Feature | `billable_spend` | Billable usage feature |
-| Plan | `clearinghouse_default_ppu` | Pay-per-use rate card |
+| Meter | `fee_wei` / `billable_secs` / `network_fee_usd_micros_by_manifest` | Analytics |
+| Feature | `network_spend` | Starter settlement feature |
+| Feature | `billable_spend` | Phase-2 billable feature |
+| Plan | `clearinghouse_owner_starter` | Owner wallet Starter |
+| Plan | `clearinghouse_demo_starter` | Demo M2M Starter |
 
 Idempotent — safe to re-run.
 
-### Two-meter billing model
+### Settlement model
 
 ```text
 Signer computed_fee (wei)
-  → collector: network_fee_usd_micros   (raw network cost — observability)
-  → collector: billable_usd_micros      (network × pipeline/model markup — billing)
-       → billable_spend feature
-            → clearinghouse_default_ppu subscription per customer
+  → collector: network_fee_usd_micros   (exact fractional; settlement)
+  → collector: billable_usd_micros      (interim = network; phase-2 markup later)
+       → network_spend feature
+            → Owner / Demo Starter subscription
+                 discounts.usage (included $) then prepaid credits
 ```
 
 Collector pipeline config: [`openmeter-collector/collector.yaml`](openmeter-collector/collector.yaml).
 The collector emits `billable_usd_micros` as an interim passthrough equal to
 `network_fee_usd_micros` so the billable meter validates and accumulates. Phase-2
 markup rules (network × pipeline/model multiplier) are not applied yet — until then
-`billable_usd_micros == network_fee_usd_micros`.
+`billable_usd_micros == network_fee_usd_micros`. Starter plans bill **`network_spend`**,
+not `billable_spend`.
 
 ### Identity contract (collector)
 
