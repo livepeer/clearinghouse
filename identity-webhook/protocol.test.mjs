@@ -232,8 +232,14 @@ describe("handleAuthorize checkBalance hook", () => {
     assert.equal((await res.json()).expiry, 1234567890);
   });
 
-  it("ignores negative, non-finite, or non-integer checkBalance expiry values", async () => {
-    for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY, 12.5]) {
+  it("ignores negative, non-finite, non-integer, or unsafe checkBalance expiry values", async () => {
+    for (const bad of [
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      12.5,
+      Number.MAX_SAFE_INTEGER + 1,
+    ]) {
       const res = await handleAuthorize(authorizeRequest({ body: goodBody }), {
         ...config,
         checkBalance: async () => ({ expiry: bad }),
@@ -251,7 +257,15 @@ describe("handleAuthorize checkBalance hook", () => {
   });
 
   it("rejects with 500 when the verifier returns an invalid expiry", async () => {
-    for (const bad of [undefined, null, Number.NaN, 12.5, -1, "123"]) {
+    for (const bad of [
+      undefined,
+      null,
+      Number.NaN,
+      12.5,
+      -1,
+      "123",
+      Number.MAX_SAFE_INTEGER + 1,
+    ]) {
       const brokenVerifier = {
         kind: "custom",
         verify: async () => ({

@@ -124,12 +124,7 @@ export function isValidUsageIdentity(identity) {
 
 /** UNIX-seconds expiry for the go-livepeer AuthExpiry wire field. */
 function isValidExpiry(expiry) {
-  return (
-    typeof expiry === "number" &&
-    Number.isFinite(expiry) &&
-    Number.isInteger(expiry) &&
-    expiry >= 0
-  );
+  return typeof expiry === "number" && Number.isSafeInteger(expiry) && expiry >= 0;
 }
 
 function rejectStatusFromError(err) {
