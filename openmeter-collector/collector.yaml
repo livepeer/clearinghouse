@@ -1,5 +1,12 @@
 # OpenMeter Collector: go-livepeer remote signer Kafka -> hosted OpenMeter/Konnect.
 #
+# Kept in sync with pymthouse deploy/openmeter-collector/collector.yaml (identity +
+# fee mapping). Clearinghouse-specific: entrypoint normalizes OPENMETER_URL for
+# Konnect/self-hosted ingest; stricter owner compound-auth + empty-id guards;
+# billable_usd_micros passthrough for phase-2 catalog meters; non-positive ETH/USD
+# rejection. Catalog/bootstrap Starter plans align with pymthouse v0.3.3 (see
+# provision/catalog.json).
+#
 # ETH/USD: fetched from PRICE_ORACLE_URL at startup (defaults to Coinbase spot endpoint;
 # sequence blocks until
 # warm succeeds; collector never reads Kafka until cache is populated). Refreshed on
@@ -61,6 +68,7 @@ input:
       - label: price_warm
         generate:
           count: 1
+          interval: ""
           mapping: 'root = {}'
         processors:
           - resource: fetch_eth_usd_price
