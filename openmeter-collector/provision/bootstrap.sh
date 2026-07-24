@@ -19,11 +19,12 @@
 #       subject_keys = [<client_id>:<external_user_id>] (matches the CloudEvent subject).
 #       M2M / managed users only. If external_user_id starts with owner:, delegates to
 #       the owner command (bare {users.id} customer key).
-#       --subscribe also ensures a subscription on the catalog plan (best-effort).
+#       --subscribe also ensures a subscription on the demo/M2M Starter plan (best-effort).
 #
 #   ./bootstrap.sh owner <user_id> [display_name] [--subscribe]
 #       Ensure a shared app-owner customer keyed by bare {users.id} (CloudEvent subject
 #       after the collector strips the owner: wire prefix from auth_id).
+#       --subscribe uses the Owner Starter plan (network_spend + discounts.usage).
 #
 #   ./bootstrap.sh all <client_id> <external_user_id> [display_name] [--subscribe]
 #       catalog + customer in one run.
@@ -139,7 +140,43 @@ kapi_get_soft()  { kapi_run soft get    "$1"; }
 kapi_post_soft() { kapi_run soft post   "$1"; }
 kapi_delete_soft() { kapi_run soft delete "$1"; }
 
-plan_config_key() { jq -r '.plan.key // .plan_key // empty' "$CATALOG"; }
+# Catalog may use .plans[] (preferred) or a legacy single .plan.
+catalog_plans_json() {
+  jq -c 'if (.plans | type) == "array" and (.plans | length) > 0 then .plans
+         elif .plan then [.plan]
+         else [] end' "$CATALOG"
+}
+
+plan_key_for_role() {
+  local role="$1"
+  case "$role" in
+    owner)
+      if [ -n "${OPENMETER_OWNER_STARTER_PLAN_KEY:-}" ]; then
+        printf '%s' "$OPENMETER_OWNER_STARTER_PLAN_KEY"
+        return 0
+      fi
+      ;;
+    m2m)
+      if [ -n "${OPENMETER_DEMO_STARTER_PLAN_KEY:-}" ]; then
+        printf '%s' "$OPENMETER_DEMO_STARTER_PLAN_KEY"
+        return 0
+      fi
+      ;;
+  esac
+  catalog_plans_json | jq -r --arg r "$role" '
+    (map(select(.subscribe_role == $r)) | .[0].key)
+    // .[0].key
+    // empty
+  '
+}
+
+# Included cycle allowance override (USD micros). Empty = use catalog discounts.usage.
+included_usd_micros_override() {
+  local raw="${OPENMETER_DEFAULT_STARTER_INCLUDED_USD_MICROS:-}"
+  if [ -n "$raw" ] && [[ "$raw" =~ ^[0-9]+$ ]] && [ "$raw" -gt 0 ]; then
+    printf '%s' "$raw"
+  fi
+}
 
 meter_id_for() {
   kapi_get /meters | jq -r --arg k "$1" '(.data // .)[] | select(.key == $k) | .id'
@@ -217,18 +254,19 @@ ensure_features() {
 }
 
 build_plan_body() {
-  local feat_map
-  feat_map="$(kapi_get /features | jq '[(.data // .)[] | {(.key): .id}] | add')"
-  jq --argjson feats "$feat_map" '
-    .plan as $p
+  local plan_json="$1" feat_map included
+  feat_map="$(kapi_get /features | jq '[(.data // .)[] | {(.key): .id}] | add // {}')"
+  included="$(included_usd_micros_override)"
+  jq -n --argjson p "$plan_json" --argjson feats "$feat_map" --arg included "$included" '
+    ($p) as $plan
     | {
-        key: $p.key,
-        name: $p.name,
-        description: ($p.description // empty),
-        currency: $p.currency,
-        billing_cadence: $p.billing_cadence,
+        key: $plan.key,
+        name: $plan.name,
+        description: ($plan.description // empty),
+        currency: $plan.currency,
+        billing_cadence: $plan.billing_cadence,
         phases: [
-          $p.phases[]
+          $plan.phases[]
           | {
               key,
               name,
@@ -241,12 +279,17 @@ build_plan_body() {
                     billing_cadence,
                     price
                   }
+                  + (if $included != "" then { discounts: { usage: $included } }
+                     elif (.discounts.usage // null) != null then { discounts }
+                     else {} end)
               ]
             }
         ]
       }
+    + (if ($plan.settlement_mode // "") != "" then { settlement_mode: $plan.settlement_mode } else {} end)
+    + (if ($plan.metadata // null) != null then { metadata: $plan.metadata } else {} end)
     | if .description == "" then del(.description) else . end
-  ' "$CATALOG"
+  '
 }
 
 publish_plan() {
@@ -260,12 +303,11 @@ publish_plan() {
   return 1
 }
 
-ensure_plan() {
+ensure_one_plan() {
+  local plan_json="$1"
   local plan_key
-  plan_key="$(plan_config_key)"
-  [ -n "$plan_key" ] || { info "plan    — none configured"; return 0; }
-  jq -e '.plan' "$CATALOG" >/dev/null 2>&1 \
-    || die "catalog plan block missing — add .plan or remove plan_key"
+  plan_key="$(jq -r '.key // empty' <<<"$plan_json")"
+  [ -n "$plan_key" ] || die "catalog plan entry missing key"
 
   if [ -n "$(find_plan_by_status "$plan_key" active)" ]; then
     info "plan    $plan_key — active"
@@ -281,14 +323,14 @@ ensure_plan() {
     return 0
   fi
 
-  body="$(build_plan_body)"
+  body="$(build_plan_body "$plan_json")"
   if printf '%s' "$body" | jq -e '[
     .phases[].rate_cards[].feature.id
     | select(. == null or . == "")
   ] | length == 0' >/dev/null; then
     :
   else
-    die "plan rate cards reference unknown features — run ensure_features first"
+    die "plan $plan_key rate cards reference unknown features — run ensure_features first"
   fi
 
   plan_id="$(printf '%s' "$body" | kapi_post /plans | jq -r '.id')"
@@ -296,11 +338,25 @@ ensure_plan() {
   publish_plan "$plan_id" "$plan_key" || true
 }
 
+ensure_plans() {
+  local plans count
+  plans="$(catalog_plans_json)"
+  count="$(jq 'length' <<<"$plans")"
+  if [ "$count" -eq 0 ]; then
+    info "plan    — none configured"
+    return 0
+  fi
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    ensure_one_plan "$p"
+  done < <(jq -c '.[]' <<<"$plans")
+}
+
 cmd_catalog() {
   info "== catalog ($BASE$PREFIX) =="
   ensure_meters
   ensure_features
-  ensure_plan
+  ensure_plans
 }
 
 # --- customer --------------------------------------------------------------
@@ -312,8 +368,9 @@ find_customer() {
 
 # Create/ensure a customer with exact key + subject_keys = [key]. Never mutates
 # subject_keys on existing records (OpenMeter forbids changes once subscribed).
+# subscribe_role: owner | m2m — selects which Starter plan --subscribe uses.
 ensure_customer_key() {
-  local key="$1" display="$2" subscribe="$3" label="${4:-$1}"
+  local key="$1" display="$2" subscribe="$3" label="${4:-$1}" role="${5:-m2m}"
   [ -n "$key" ] || die "customer key is required"
   [ -n "$display" ] || display="$key"
 
@@ -335,7 +392,7 @@ ensure_customer_key() {
     fi
   fi
 
-  [ "$subscribe" = "1" ] && ensure_subscription "$id" "$key" || true
+  [ "$subscribe" = "1" ] && ensure_subscription "$id" "$key" "$role" || true
 }
 
 ensure_owner_customer() {
@@ -346,7 +403,7 @@ ensure_owner_customer() {
     owner:*) user_id="${user_id#owner:}" ;;
   esac
   [ -n "$user_id" ] || die "owner requires a non-empty <user_id>"
-  ensure_customer_key "$user_id" "$display" "$subscribe" "owner:$user_id"
+  ensure_customer_key "$user_id" "$display" "$subscribe" "owner:$user_id" "owner"
 }
 
 ensure_customer() {
@@ -361,14 +418,15 @@ ensure_customer() {
   esac
   # M2M / managed user: CloudEvent subject = compound client_id:external_user_id.
   local compound="$client_id:$external_user_id"
-  ensure_customer_key "$compound" "$display" "$subscribe" "$compound"
+  ensure_customer_key "$compound" "$display" "$subscribe" "$compound" "m2m"
 }
 
-# Best-effort subscription on the catalog plan. Skips if the customer already has one.
+# Best-effort subscription on the Starter plan for subscribe_role (owner|m2m).
+# Skips if the customer already has any subscription.
 ensure_subscription() {
-  local customer_id="$1" label="$2"
-  local plan_key; plan_key="$(plan_config_key)"
-  [ -n "$plan_key" ] || { warn "no plan_key in catalog; skipping subscription"; return 0; }
+  local customer_id="$1" label="$2" role="${3:-m2m}"
+  local plan_key; plan_key="$(plan_key_for_role "$role")"
+  [ -n "$plan_key" ] || { warn "no $role plan in catalog; skipping subscription"; return 0; }
 
   local existing resp
   existing="$(kapi_get_soft "/subscriptions?customer_id=$customer_id" 2>/dev/null \
@@ -381,7 +439,7 @@ ensure_subscription() {
   body="$(jq -n --arg ck "$label" --arg pk "$plan_key" \
     '{customer:{key:$ck}, plan:{key:$pk}}')"
   if resp="$(printf '%s' "$body" | kapi_post_soft /subscriptions)" && [ -n "$resp" ]; then
-    info "sub      $label — created on $plan_key"
+    info "sub      $label — created on $plan_key ($role)"
   else
     warn "sub      $label — could not create subscription on $plan_key (create manually if needed)"
   fi

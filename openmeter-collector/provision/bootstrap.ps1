@@ -126,9 +126,30 @@ function Kapi-Delete($path) { Kapi-Run $false delete $path $null | Out-Null }
 function Kapi-Get-Soft($path) { return Kapi-Run $true get $path $null }
 function Kapi-Send-Soft($method, $path, $bodyJson) { return Kapi-Run $true $method $path $bodyJson }
 function Kapi-Delete-Soft($path) { Kapi-Run $true delete $path $null | Out-Null }
-function Plan-ConfigKey {
-  if ($catalogObj.plan -and $catalogObj.plan.key) { return $catalogObj.plan.key }
-  return $catalogObj.plan_key
+function Catalog-Plans {
+  if ($catalogObj.plans -and @($catalogObj.plans).Count -gt 0) { return @($catalogObj.plans) }
+  if ($catalogObj.plan) { return @($catalogObj.plan) }
+  return @()
+}
+function Plan-KeyForRole($role) {
+  if ($role -eq 'owner' -and $env:OPENMETER_OWNER_STARTER_PLAN_KEY) {
+    return $env:OPENMETER_OWNER_STARTER_PLAN_KEY.Trim()
+  }
+  if ($role -eq 'm2m' -and $env:OPENMETER_DEMO_STARTER_PLAN_KEY) {
+    return $env:OPENMETER_DEMO_STARTER_PLAN_KEY.Trim()
+  }
+  $plans = Catalog-Plans
+  $matched = $plans | Where-Object { $_.subscribe_role -eq $role } | Select-Object -First 1
+  if ($matched) { return $matched.key }
+  if ($plans.Count -gt 0) { return $plans[0].key }
+  return $null
+}
+function Included-UsdMicrosOverride {
+  $raw = $env:OPENMETER_DEFAULT_STARTER_INCLUDED_USD_MICROS
+  if (-not $raw) { return $null }
+  $trimmed = $raw.Trim()
+  if ($trimmed -match '^[0-9]+$' -and [int64]$trimmed -gt 0) { return $trimmed }
+  return $null
 }
 function Meter-IdFor($meterKey) {
   $m = Items (Kapi-Get '/meters') | Where-Object { $_.key -eq $meterKey } | Select-Object -First 1
@@ -190,32 +211,41 @@ function Ensure-Features {
     Info "feature $($f.key) - recreated (meter: $meterKey)"
   }
 }
-function Build-PlanBody {
+function Build-PlanBody($plan) {
   $featMap = @{}
   foreach ($feat in Items (Kapi-Get '/features')) { $featMap[$feat.key] = $feat.id }
-  $p = $catalogObj.plan
+  $included = Included-UsdMicrosOverride
   $phases = @()
-  foreach ($phase in $p.phases) {
+  foreach ($phase in $plan.phases) {
     $rateCards = @()
     foreach ($rc in $phase.rate_cards) {
-      $rateCards += [ordered]@{
+      $card = [ordered]@{
         key = $rc.key
         name = $rc.name
         feature = @{ id = $featMap[$rc.feature_key] }
         billing_cadence = $rc.billing_cadence
         price = $rc.price
       }
+      if ($included) {
+        $card.discounts = @{ usage = $included }
+      }
+      elseif ($rc.discounts -and $rc.discounts.usage) {
+        $card.discounts = @{ usage = [string]$rc.discounts.usage }
+      }
+      $rateCards += $card
     }
     $phases += [ordered]@{ key = $phase.key; name = $phase.name; rate_cards = $rateCards }
   }
   $body = [ordered]@{
-    key = $p.key
-    name = $p.name
-    currency = $p.currency
-    billing_cadence = $p.billing_cadence
+    key = $plan.key
+    name = $plan.name
+    currency = $plan.currency
+    billing_cadence = $plan.billing_cadence
     phases = $phases
   }
-  if ($p.description) { $body.description = $p.description }
+  if ($plan.description) { $body.description = $plan.description }
+  if ($plan.settlement_mode) { $body.settlement_mode = $plan.settlement_mode }
+  if ($plan.metadata) { $body.metadata = $plan.metadata }
   return ($body | ConvertTo-Json -Depth 8 -Compress)
 }
 function Publish-Plan($planId, $planKey) {
@@ -227,11 +257,9 @@ function Publish-Plan($planId, $planKey) {
   Warn "plan    $planKey - could not publish (ensure features have meter links)"
   return $false
 }
-function Ensure-Plan {
-  $planKey = Plan-ConfigKey
-  if (-not $planKey) { Info 'plan    - none configured'; return }
-  if (-not $catalogObj.plan) { Die 'catalog plan block missing - add .plan or remove plan_key' }
-
+function Ensure-OnePlan($plan) {
+  $planKey = $plan.key
+  if (-not $planKey) { Die 'catalog plan entry missing key' }
   if (Find-PlanByStatus $planKey 'active') { Info "plan    $planKey - active"; return }
 
   $draft = Find-PlanByStatus $planKey 'draft'
@@ -241,27 +269,33 @@ function Ensure-Plan {
     return
   }
 
-  $bodyJson = Build-PlanBody
+  $bodyJson = Build-PlanBody $plan
   $bodyObj = $bodyJson | ConvertFrom-Json
   foreach ($phase in $bodyObj.phases) {
     foreach ($rc in $phase.rate_cards) {
-      if (-not $rc.feature.id) { Die 'plan rate cards reference unknown features - run ensure_features first' }
+      if (-not $rc.feature.id) { Die "plan $planKey rate cards reference unknown features - run ensure_features first" }
     }
   }
   $created = Kapi-Send 'post' '/plans' $bodyJson
   Info "plan    $planKey - created (draft)"
   Publish-Plan $created.id $planKey | Out-Null
 }
+function Ensure-Plans {
+  $plans = Catalog-Plans
+  if ($plans.Count -eq 0) { Info 'plan    - none configured'; return }
+  foreach ($p in $plans) { Ensure-OnePlan $p }
+}
 function Invoke-Catalog {
   Info "== catalog ($BASE$PREFIX) =="
-  Ensure-Meters; Ensure-Features; Ensure-Plan
+  Ensure-Meters; Ensure-Features; Ensure-Plans
 }
 
 # --- customer --------------------------------------------------------------
-function Ensure-CustomerKey($key, $display, $subscribe, $label) {
+function Ensure-CustomerKey($key, $display, $subscribe, $label, $role) {
   if (-not $key) { Die 'customer key is required' }
   if (-not $display) { $display = $key }
   if (-not $label) { $label = $key }
+  if (-not $role) { $role = 'm2m' }
 
   $cust = Items (Kapi-Get '/customers') | Where-Object { $_.key -eq $key } | Select-Object -First 1
   if (-not $cust) {
@@ -278,14 +312,14 @@ function Ensure-CustomerKey($key, $display, $subscribe, $label) {
       Warn "  (OpenMeter blocks subject_key changes on subscribed customers - reconcile manually)"
     }
   }
-  if ($subscribe) { Ensure-Subscription $id $key }
+  if ($subscribe) { Ensure-Subscription $id $key $role }
 }
 
 function Ensure-OwnerCustomer($userId, $display, $subscribe) {
   if (-not $userId) { Die 'owner requires <user_id>' }
   if ($userId.StartsWith('owner:')) { $userId = $userId.Substring('owner:'.Length) }
   if (-not $userId) { Die 'owner requires a non-empty <user_id>' }
-  Ensure-CustomerKey $userId $display $subscribe "owner:$userId"
+  Ensure-CustomerKey $userId $display $subscribe "owner:$userId" 'owner'
 }
 
 function Ensure-Customer($clientId, $externalUserId, $display, $subscribe) {
@@ -297,12 +331,13 @@ function Ensure-Customer($clientId, $externalUserId, $display, $subscribe) {
   }
   # M2M / managed user: CloudEvent subject = compound client_id:external_user_id.
   $compound = "$clientId`:$externalUserId"
-  Ensure-CustomerKey $compound $display $subscribe $compound
+  Ensure-CustomerKey $compound $display $subscribe $compound 'm2m'
 }
 
-function Ensure-Subscription($customerId, $label) {
-  $planKey = Plan-ConfigKey
-  if (-not $planKey) { Warn 'no plan_key in catalog; skipping subscription'; return }
+function Ensure-Subscription($customerId, $label, $role) {
+  if (-not $role) { $role = 'm2m' }
+  $planKey = Plan-KeyForRole $role
+  if (-not $planKey) { Warn "no $role plan in catalog; skipping subscription"; return }
   $existing = Items (Kapi-Get-Soft "/subscriptions?customer_id=$customerId") | Where-Object { $_.customer_id -eq $customerId }
   if ($existing) { Info "sub      $label - exists"; return }
   $body = [ordered]@{
@@ -311,7 +346,7 @@ function Ensure-Subscription($customerId, $label) {
   }
   $created = Kapi-Send-Soft 'post' '/subscriptions' ($body | ConvertTo-Json -Compress)
   if ($created) {
-    Info "sub      $label - created on $planKey"
+    Info "sub      $label - created on $planKey ($role)"
   }
   else {
     Warn "sub      $label - could not create subscription on $planKey (create manually if needed)"
