@@ -96,7 +96,8 @@ egress. Break usage down per-tenant/user with the `client_id` / `external_user_i
 dimensions, not by changing the subject. The scripts never mutate `subject_keys` on
 existing customers; they warn if an existing customer is missing the expected key.
 
-See also [`../identity`](../identity) (Go helpers + unit tests for this contract).
+Identity mapping is enforced by the Bloblang in [`../collector.yaml`](../collector.yaml)
+and covered by Benthos unit tests in [`../collector_benthos_test.yaml`](../collector_benthos_test.yaml).
 
 ## Limitations
 

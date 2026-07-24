@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - "identity-webhook/**"
+      - "openmeter-collector/**"
       - ".github/workflows/ci.yml"
   push:
     branches: [main]
     paths:
       - "identity-webhook/**"
+      - "openmeter-collector/**"
       - ".github/workflows/ci.yml"
 
 permissions:
@@ -33,3 +35,19 @@ jobs:
           cache-dependency-path: identity-webhook/package-lock.json
       - run: npm ci
       - run: npm test
+
+  openmeter-collector:
+    name: openmeter-collector
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: openmeter-collector
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Benthos unit tests (identity + fee mapping)
+        run: |
+          docker run --rm \
+            -v "$PWD:/work:ro" \
+            -w /work \
+            ghcr.io/openmeterio/benthos-collector:latest \
+            test --verbose ./collector.yaml
