@@ -74,6 +74,17 @@ jobs:
             exit 1
           fi
 
+      - name: Require branch for rc-from-branch
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'rc-from-branch'
+        run: |
+          case "${GITHUB_REF}" in
+            refs/heads/*) ;;
+            *)
+              echo "::error::rc-from-branch must run from a branch (Use workflow from: a branch), got ${GITHUB_REF}"
+              exit 1
+              ;;
+          esac
+
       - name: Resolve publish version (rc-from-branch)
         id: rc
         if: github.event_name == 'workflow_dispatch' && inputs.mode == 'rc-from-branch'

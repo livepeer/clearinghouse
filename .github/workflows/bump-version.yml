@@ -23,6 +23,15 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Require branch ref
+        run: |
+          case "${GITHUB_REF}" in
+            refs/heads/*) ;;
+            *)
+              echo "::error::bump-version must run from a branch (Use workflow from: a branch), got ${GITHUB_REF}"
+              exit 1
+              ;;
+          esac
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
