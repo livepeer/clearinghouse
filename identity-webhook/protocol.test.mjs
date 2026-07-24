@@ -249,6 +249,33 @@ describe("handleAuthorize checkBalance hook", () => {
     });
     assert.equal((await res.json()).status, 200);
   });
+
+  it("rejects with 500 when the verifier returns an invalid expiry", async () => {
+    for (const bad of [undefined, null, Number.NaN, 12.5, -1, "123"]) {
+      const brokenVerifier = {
+        kind: "custom",
+        verify: async () => ({
+          identity: {
+            issuer: "http://webhook.test",
+            client_id: "tenant-a",
+            usage_subject: "user-1",
+            usage_subject_type: "api_key_user",
+          },
+          expiry: bad,
+        }),
+      };
+      const res = await handleAuthorize(authorizeRequest({ body: goodBody }), {
+        webhookSecret: SECRET,
+        endUserAuth: brokenVerifier,
+        checkBalance: async () => ({ expiry: 100 }),
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), {
+        status: 500,
+        reason: "verifier returned invalid expiry",
+      });
+    }
+  });
 });
 
 describe("routeWebhookRequest", () => {

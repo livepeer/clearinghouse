@@ -122,6 +122,16 @@ export function isValidUsageIdentity(identity) {
   );
 }
 
+/** UNIX-seconds expiry for the go-livepeer AuthExpiry wire field. */
+function isValidExpiry(expiry) {
+  return (
+    typeof expiry === "number" &&
+    Number.isFinite(expiry) &&
+    Number.isInteger(expiry) &&
+    expiry >= 0
+  );
+}
+
 function rejectStatusFromError(err) {
   if (err instanceof WebhookError) {
     const status = err.status >= 400 && err.status < 600 ? err.status : 403;
@@ -166,6 +176,9 @@ export async function handleAuthorize(request, config) {
     if (!isValidUsageIdentity(verified.identity)) {
       throw new WebhookError("verifier returned incomplete identity", { status: 500 });
     }
+    if (!isValidExpiry(verified.expiry)) {
+      throw new WebhookError("verifier returned invalid expiry", { status: 500 });
+    }
 
     // Optional live balance/credit gate, applied after identity is proven and
     // regardless of verifier kind (OIDC, composite, API key). Throwing a
@@ -181,13 +194,7 @@ export async function handleAuthorize(request, config) {
         payload,
         request,
       });
-      if (
-        decision &&
-        typeof decision.expiry === "number" &&
-        Number.isFinite(decision.expiry) &&
-        Number.isInteger(decision.expiry) &&
-        decision.expiry >= 0
-      ) {
+      if (decision && isValidExpiry(decision.expiry)) {
         expiry = Math.min(expiry, decision.expiry);
       }
     }

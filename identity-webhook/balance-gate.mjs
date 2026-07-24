@@ -12,9 +12,9 @@
  * Balances are USD micros (1 USD = 1_000_000 micros), accepted as bigint,
  * safe integer number, or integer string.
  *
- * Example (in-repo relative imports; published package exports may differ):
- *   import { handleAuthorize } from "./protocol.mjs";
- *   import { createBalanceGate } from "./balance-gate.mjs";
+ * Example (published package; in-repo relative `./protocol.mjs` also works):
+ *   import { handleAuthorize } from "@pymthouse/clearinghouse-identity-webhook/protocol";
+ *   import { createBalanceGate } from "@pymthouse/clearinghouse-identity-webhook/balance-gate";
  *
  *   const checkBalance = createBalanceGate({
  *     getBalanceUsdMicros: async (identity) =>
