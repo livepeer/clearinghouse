@@ -127,13 +127,23 @@ pipeline:
         let client_id = if $is_compound { $auth_id.slice(0, $colon) } else { $auth_id }
         let usage_subject_parsed = if $is_compound { $auth_id.slice($colon + 1) } else { $auth_id }
         # Owner wallet: wire usage_subject is owner:{users.id}; CE subject = bare id.
+        # Only compound auth_id (client_id:owner:…) is treated as owner — a bare
+        # "owner:…" string is not a valid wire form.
         # M2M end-users: meter subject = full compound auth_id.
-        let is_owner_subject = $usage_subject_parsed.index_of("owner:") == 0
-        let usage_subject_type = if $is_owner_subject { "app_owner" } else { "external_user_id" }
+        let is_owner_subject = $is_compound && $usage_subject_parsed.index_of("owner:") == 0
         let owner_bare_id = if $is_owner_subject {
-          $usage_subject_parsed.slice("owner:".length())
+          $usage_subject_parsed.slice("owner:".length()).trim()
         } else {
-          $usage_subject_parsed
+          ""
+        }
+        # Preserve upstream type (oidc_user / api_key_user) when present; owners always app_owner.
+        let upstream_subject_type = $data.usage_subject_type.or("").string().trim()
+        let usage_subject_type = if $is_owner_subject {
+          "app_owner"
+        } else if $upstream_subject_type != "" {
+          $upstream_subject_type
+        } else {
+          "external_user_id"
         }
         let openmeter_subject = if $is_owner_subject { $owner_bare_id } else { $auth_id }
         let openmeter_customer_key = $openmeter_subject
@@ -162,7 +172,7 @@ pipeline:
         }
         let manifest_id_out = if $manifest_id != "" { $manifest_id } else { "unknown" }
 
-        root = if $auth_id == "" {
+        root = if $auth_id == "" || ($is_owner_subject && $owner_bare_id == "") {
           deleted()
         } else {
           {
@@ -191,7 +201,7 @@ pipeline:
               "gateway_request_id": $data.request_id,
               "auth_id": $auth_id,
               "openmeter_customer_key": $openmeter_customer_key,
-              "eth_usd_price": $eth_usd.string(),
+              "eth_usd_price": $eth_usd,
             }
           }
         }

@@ -73,8 +73,8 @@ From [`catalog.json`](catalog.json):
 
 | Kind | Key | Notes |
 | --- | --- | --- |
-| Meter | `network_fee_usd_micros` | SUM of `$.network_fee_usd_micros` |
-| Meter | `billable_usd_micros` | SUM of `$.billable_usd_micros` (not emitted by collector until phase-2; meter stays empty until then) |
+| Meter | `network_fee_usd_micros` | SUM of `$.network_fee_usd_micros` (exact fractional at ingest; no per-ticket ceil) |
+| Meter | `billable_usd_micros` | SUM of `$.billable_usd_micros` (same fractional semantics; interim = network fee) |
 | Meter | `signed_ticket_count` | COUNT |
 | Feature | `network_spend` | linked to `network_fee_usd_micros` meter |
 | Feature | `billable_spend` | linked to `billable_usd_micros` meter |

@@ -49,10 +49,12 @@ jobs:
         working-directory: openmeter-collector
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      # `benthos test ./collector.yaml` auto-discovers companion
+      # collector_benthos_test.yaml (same stem + _benthos_test suffix).
       - name: Benthos unit tests (identity + fee mapping)
         run: |
           docker run --rm \
             -v "$PWD:/work:ro" \
             -w /work \
             ghcr.io/openmeterio/benthos-collector:latest \
-            test --verbose ./collector.yaml
+            test --verbose ./collector.yaml ./collector_benthos_test.yaml

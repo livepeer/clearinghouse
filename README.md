@@ -237,7 +237,8 @@ Upstream Kafka events carry `auth_id` unchanged (`webhook → go-livepeer state 
 - `data.client_id` = tenant (parsed from `auth_id`)
 - `data.usage_subject` / `data.external_user_id` = end user id, or bare `{users.id}` for owners
 - `data.auth_id` retained for compatibility; `data.openmeter_customer_key` = billing wallet key
-- `data.eth_usd_price` = ETH/USD oracle rate used for that event's Wei → USD micros conversion
+- `data.eth_usd_price` = ETH/USD oracle rate (number) used for that event's Wei → USD micros conversion
+- `network_fee_usd_micros` / `billable_usd_micros` are **exact fractional** values (`fee_wei * eth_usd / 1e12`) — no per-ticket ceil. OpenMeter SUM accumulates fractions; read paths / session boundaries ceil once so dense live tickets are not overbilled. Plan unit price remains $0.000001 per micro; fractional ingest is intentional.
 
 Example egress event for M2M `auth_id = demo-client:demo-user`:
 
