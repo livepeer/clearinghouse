@@ -13,9 +13,13 @@ info() { printf '%s\n' "$*" >&2; }
 
 [ -f "$ACTION_CODE_FILE" ] || die "action code not found: $ACTION_CODE_FILE"
 
+# Resolve the auth0 CLI: caller-supplied AUTH0_BIN on PATH, else the local copy
+# bootstrap.sh drops next to this script.
 AUTH0_BIN="${AUTH0_BIN:-auth0}"
-command -v "$AUTH0_BIN" >/dev/null 2>&1 || AUTH0_BIN="$SCRIPT_DIR/auth0"
-[ -x "$AUTH0_BIN" ] || die "auth0 CLI required (run bootstrap.sh or install auth0 CLI)"
+if ! command -v "$AUTH0_BIN" >/dev/null 2>&1; then
+  AUTH0_BIN="$SCRIPT_DIR/auth0"
+  [ -x "$AUTH0_BIN" ] || die "auth0 CLI required (run bootstrap.sh or install auth0 CLI)"
+fi
 
 ACTION_ID="$("$AUTH0_BIN" actions list --json 2>/dev/null | jq -r --arg n "$ACTION_NAME" '.[] | select(.name == $n) | .id' | head -n1)"
 
