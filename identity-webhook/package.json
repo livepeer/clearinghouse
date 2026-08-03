@@ -26,6 +26,11 @@
       "types": "./verifiers.d.ts",
       "import": "./verifiers.mjs",
       "default": "./verifiers.mjs"
+    },
+    "./balance-gate": {
+      "types": "./balance-gate.d.ts",
+      "import": "./balance-gate.mjs",
+      "default": "./balance-gate.mjs"
     }
   },
   "files": [
@@ -35,6 +40,8 @@
     "protocol.d.ts",
     "verifiers.mjs",
     "verifiers.d.ts",
+    "balance-gate.mjs",
+    "balance-gate.d.ts",
     "keys.mjs"
   ],
   "dependencies": {

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createBalanceGate, parseUsdMicros } from "./balance-gate.mjs";
 import { routeWebhookRequest } from "./protocol.mjs";
 import { createEndUserVerifierFromEnv } from "./verifiers.mjs";
 
@@ -19,6 +20,35 @@ const config = {
   webhookSecret: required("WEBHOOK_SECRET"),
   endUserAuth,
 };
+
+// Optional compose/dev hook: DEMO_BALANCE_USD_MICROS enables createBalanceGate
+// against a fixed balance (e.g. "0" → 483, "5000000" → allow + expiry TTL).
+const demoBalance = process.env.DEMO_BALANCE_USD_MICROS?.trim();
+if (demoBalance !== undefined && demoBalance !== "") {
+  if (parseUsdMicros(demoBalance) === null) {
+    throw new Error(
+      `DEMO_BALANCE_USD_MICROS must be an integer (got ${JSON.stringify(demoBalance)})`,
+    );
+  }
+  const expiryTtlRaw = process.env.DEMO_BALANCE_EXPIRY_TTL_SECONDS?.trim();
+  let expiryTtl = { seconds: 30 };
+  if (expiryTtlRaw) {
+    const seconds = Number(expiryTtlRaw);
+    if (!Number.isInteger(seconds) || seconds <= 0) {
+      throw new Error(
+        `DEMO_BALANCE_EXPIRY_TTL_SECONDS must be a positive integer (got ${JSON.stringify(expiryTtlRaw)})`,
+      );
+    }
+    expiryTtl = { seconds };
+  }
+  config.checkBalance = createBalanceGate({
+    getBalanceUsdMicros: async () => demoBalance,
+    expiryTtl,
+  });
+  console.log(
+    `identity-webhook: DEMO_BALANCE_USD_MICROS=${demoBalance} (live balance gate enabled)`,
+  );
+}
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
