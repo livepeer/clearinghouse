@@ -19,7 +19,8 @@
  *   const checkBalance = createBalanceGate({
  *     getBalanceUsdMicros: async (identity) =>
  *       readLiveCreditBalanceUsdMicros(identity.client_id, identity.usage_subject),
- *     expiryTtl: { seconds: 30 }, // sets webhook expiry = now + 30s
+ *     expiryTtl: { seconds: 30 }, // preferred; sets webhook expiry = now + 30s
+ *     // reauthTtlSeconds: 30, // legacy alias (pymthouse ≤0.4.2); do not pass both
  *   });
  *   return handleAuthorize(request, { webhookSecret, endUserAuth, checkBalance });
  */
@@ -72,6 +73,9 @@ export function parseUsdMicros(value) {
  *   When set, sets the webhook response `expiry` to now + this many whole
  *   seconds (also capped against the verifier expiry). go-livepeer stores that
  *   as AuthExpiry and skips /authorize until it elapses.
+ * @param {number} [options.reauthTtlSeconds]
+ *   Legacy alias for `expiryTtl.seconds` (pymthouse ≤0.4.2). Ignored when
+ *   `expiryTtl` is also set — pass one or the other.
  * @param {boolean} [options.failClosed=true]
  *   On lookup error or unknown balance: true → reject 503 billing_unavailable;
  *   false → allow (fail open).
@@ -83,6 +87,7 @@ export function createBalanceGate({
   getBalanceUsdMicros,
   minBalanceUsdMicros = 1n,
   expiryTtl,
+  reauthTtlSeconds,
   failClosed = true,
   onError,
 } = {}) {
@@ -95,6 +100,11 @@ export function createBalanceGate({
   }
   if (minBalance < 0n) {
     throw new TypeError("createBalanceGate: minBalanceUsdMicros must not be negative");
+  }
+  if (expiryTtl != null && reauthTtlSeconds != null) {
+    throw new TypeError(
+      "createBalanceGate: pass expiryTtl or reauthTtlSeconds, not both",
+    );
   }
   let ttl = null;
   if (expiryTtl != null) {
@@ -111,6 +121,13 @@ export function createBalanceGate({
     if (!Number.isInteger(ttl) || ttl <= 0) {
       throw new TypeError(
         "createBalanceGate: expiryTtl.seconds must be a positive integer",
+      );
+    }
+  } else if (reauthTtlSeconds != null) {
+    ttl = Number(reauthTtlSeconds);
+    if (!Number.isInteger(ttl) || ttl <= 0) {
+      throw new TypeError(
+        "createBalanceGate: reauthTtlSeconds must be a positive integer",
       );
     }
   }

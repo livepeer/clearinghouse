@@ -24,7 +24,13 @@ export function createBalanceGate(options: {
     | null
     | undefined;
   minBalanceUsdMicros?: bigint | number | string;
+  /** Preferred: webhook `expiry` = now + seconds. */
   expiryTtl?: ExpiryTtl;
+  /**
+   * Legacy alias for `expiryTtl.seconds` (pymthouse ≤0.4.2).
+   * Do not pass together with `expiryTtl`.
+   */
+  reauthTtlSeconds?: number;
   failClosed?: boolean;
   onError?: (err: unknown, identity: UsageIdentity) => void;
 }): BalanceCheck;
