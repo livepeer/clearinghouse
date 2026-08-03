@@ -316,13 +316,16 @@ function Ensure-CustomerKey($key, $display, $subscribe, $label, $role) {
 }
 
 function Ensure-OwnerCustomer($userId, $display, $subscribe) {
+  if ($null -ne $userId) { $userId = $userId.Trim() }
   if (-not $userId) { Die 'owner requires <user_id>' }
-  if ($userId.StartsWith('owner:')) { $userId = $userId.Substring('owner:'.Length) }
+  if ($userId.StartsWith('owner:')) { $userId = $userId.Substring('owner:'.Length).Trim() }
   if (-not $userId) { Die 'owner requires a non-empty <user_id>' }
   Ensure-CustomerKey $userId $display $subscribe "owner:$userId" 'owner'
 }
 
 function Ensure-Customer($clientId, $externalUserId, $display, $subscribe) {
+  if ($null -ne $clientId) { $clientId = $clientId.Trim() }
+  if ($null -ne $externalUserId) { $externalUserId = $externalUserId.Trim() }
   if (-not $clientId -or -not $externalUserId) { Die 'customer requires <client_id> <external_user_id>' }
   # App-owner wire subjects share one bare-{users.id} customer.
   if ($externalUserId.StartsWith('owner:')) {

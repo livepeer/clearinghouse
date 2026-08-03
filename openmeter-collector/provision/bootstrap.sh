@@ -38,6 +38,14 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*" >&2; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 
+# Trim leading/trailing whitespace (Bash 4+ parameter expansion).
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
 command -v kongctl >/dev/null 2>&1 || die "kongctl not found (https://developer.konghq.com/kongctl/)"
 command -v jq >/dev/null 2>&1 || die "jq not found"
 [ -f "$CATALOG" ] || die "catalog not found: $CATALOG"
@@ -396,18 +404,21 @@ ensure_customer_key() {
 }
 
 ensure_owner_customer() {
-  local user_id="$1" display="$2" subscribe="$3"
+  local user_id display="$2" subscribe="$3"
+  user_id="$(trim "$1")"
   [ -n "$user_id" ] || die "owner requires <user_id>"
   # Strip accidental owner: prefix so the key is always the bare {users.id}.
   case "$user_id" in
-    owner:*) user_id="${user_id#owner:}" ;;
+    owner:*) user_id="$(trim "${user_id#owner:}")" ;;
   esac
   [ -n "$user_id" ] || die "owner requires a non-empty <user_id>"
   ensure_customer_key "$user_id" "$display" "$subscribe" "owner:$user_id" "owner"
 }
 
 ensure_customer() {
-  local client_id="$1" external_user_id="$2" display="$3" subscribe="$4"
+  local client_id external_user_id display="$3" subscribe="$4"
+  client_id="$(trim "$1")"
+  external_user_id="$(trim "$2")"
   [ -n "$client_id" ] && [ -n "$external_user_id" ] || die "customer requires <client_id> <external_user_id>"
   # App-owner wire subjects (owner:{users.id}) share one bare-id customer.
   case "$external_user_id" in
