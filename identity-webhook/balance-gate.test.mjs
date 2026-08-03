@@ -81,23 +81,6 @@ describe("createBalanceGate", () => {
         }),
       /expiryTtl.seconds must be a positive integer/,
     );
-    assert.throws(
-      () =>
-        createBalanceGate({
-          getBalanceUsdMicros: async () => 0n,
-          reauthTtlSeconds: 0,
-        }),
-      /reauthTtlSeconds must be a positive integer/,
-    );
-    assert.throws(
-      () =>
-        createBalanceGate({
-          getBalanceUsdMicros: async () => 0n,
-          expiryTtl: { seconds: 30 },
-          reauthTtlSeconds: 30,
-        }),
-      /expiryTtl or reauthTtlSeconds, not both/,
-    );
   });
 
   it("allows a positive balance", async () => {
@@ -149,16 +132,6 @@ describe("createBalanceGate", () => {
     const before = Math.floor(Date.now() / 1000);
     const result = await gate(ctx());
     assert.ok(result.expiry >= before + 30 && result.expiry <= before + 31);
-  });
-
-  it("caps expiry via legacy reauthTtlSeconds (pymthouse ≤0.4.2)", async () => {
-    const gate = createBalanceGate({
-      getBalanceUsdMicros: async () => 10n,
-      reauthTtlSeconds: 60,
-    });
-    const before = Math.floor(Date.now() / 1000);
-    const result = await gate(ctx());
-    assert.ok(result.expiry >= before + 60 && result.expiry <= before + 61);
   });
 
   it("fails closed with 503 on lookup error by default", async () => {

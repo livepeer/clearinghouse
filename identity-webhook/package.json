@@ -1,6 +1,6 @@
 {
   "name": "@pymthouse/clearinghouse-identity-webhook",
-  "version": "0.4.3",
+  "version": "0.4.2",
   "description": "API-key + OIDC identity webhook for go-livepeer remote signer (jose)",
   "type": "module",
   "license": "MIT",
