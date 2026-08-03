@@ -1,8 +1,14 @@
 # OpenMeter / Konnect metering bootstrap
 
 Idempotent provisioning of the clearinghouse metering catalog (meters, features,
-plan) and per-tenant customers, driven by [`kongctl`](https://developer.konghq.com/kongctl/)
+Starter plans) and per-tenant customers, driven by [`kongctl`](https://developer.konghq.com/kongctl/)
 against the Konnect Metering & Billing (OpenMeter) API.
+
+Aligned with [pymthouse v0.3.3](https://github.com/pymthouse/pymthouse/releases/tag/v0.3.3)
+billing: Starter plans settle on **`network_spend`** (`network_fee_usd_micros`) with
+**`credit_then_invoice`** and included cycle allowance via rate-card
+**`discounts.usage`** (default $5 / `5000000` micros). Prepaid credits are
+manual/onramp top-ups only — bootstrap does **not** auto-grant them.
 
 `kongctl` has no native meter resource yet ([Kong/kongctl#1334](https://github.com/Kong/kongctl/issues/1334)),
 so these scripts use `kongctl api` — its authenticated passthrough to the Konnect REST API —
@@ -25,6 +31,9 @@ file first (`source .env` does **not** export vars to child processes).
 | `KONGCTL_DEFAULT_KONNECT_PAT` | Konnect PAT (preferred). Falls back to `OPENMETER_API_KEY`. | from `.env` |
 | `OPENMETER_API_KEY` | Same PAT as the collector service. | from `.env` |
 | `OPENMETER_URL` | Metering API base. **Must match your Konnect org region** (US vs EU). | `https://us.api.konghq.com/v3/openmeter` |
+| `OPENMETER_OWNER_STARTER_PLAN_KEY` | Plan key for `owner … --subscribe`. | `clearinghouse_owner_starter` (catalog) |
+| `OPENMETER_DEMO_STARTER_PLAN_KEY` | Plan key for M2M `customer … --subscribe`. | `clearinghouse_demo_starter` (catalog) |
+| `OPENMETER_DEFAULT_STARTER_INCLUDED_USD_MICROS` | Override rate-card `discounts.usage` when creating plans. | catalog value (`5000000`) |
 
 If `OPENMETER_URL` is unset, the scripts derive it from `OPENMETER_INGEST_URL` (strip `/events`).
 
@@ -42,14 +51,18 @@ cp .env.example .env   # at the repo root
 ```bash
 cd openmeter-collector/provision
 
-# Catalog only — ensure meters, features, and the active plan.
+# Catalog only — ensure meters, features, and Starter plans.
 ./bootstrap.sh catalog
 
-# Provision one tenant customer (key = client_id:external_user_id).
+# Provision one M2M / managed-user customer (key = client_id:external_user_id).
 ./bootstrap.sh customer demo-client demo-user "Demo User"
 
-# Catalog + customer in one run; --subscribe also ensures a plan subscription.
+# Provision a shared app-owner customer (key = bare {users.id}).
+./bootstrap.sh owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner"
+
+# Catalog + customer; --subscribe attaches the role-appropriate Starter plan.
 ./bootstrap.sh all demo-client demo-user "Demo User" --subscribe
+./bootstrap.sh owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner" --subscribe
 ```
 
 Windows (PowerShell):
@@ -57,6 +70,7 @@ Windows (PowerShell):
 ```powershell
 .\bootstrap.ps1 catalog
 .\bootstrap.ps1 customer demo-client demo-user "Demo User"
+.\bootstrap.ps1 owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner"
 .\bootstrap.ps1 all demo-client demo-user "Demo User" -Subscribe
 ```
 
@@ -69,23 +83,47 @@ From [`catalog.json`](catalog.json):
 
 | Kind | Key | Notes |
 | --- | --- | --- |
-| Meter | `network_fee_usd_micros` | SUM of `$.network_fee_usd_micros` |
-| Meter | `billable_usd_micros` | SUM of `$.billable_usd_micros` (not emitted by collector until phase-2; meter stays empty until then) |
+| Meter | `network_fee_usd_micros` | SUM settlement meter (exact fractional at ingest) |
+| Meter | `billable_usd_micros` | Phase-2 markup meter (not on Starter plans) |
 | Meter | `signed_ticket_count` | COUNT |
-| Feature | `network_spend` | linked to `network_fee_usd_micros` meter |
-| Feature | `billable_spend` | linked to `billable_usd_micros` meter |
-| Plan | `clearinghouse_default_ppu` | usage-based rate card on `billable_spend` at $0.000001/unit (1 USD micro); created as draft then published |
+| Meter | `fee_wei` | Analytics (+ `manifest_id`) |
+| Meter | `billable_secs` | Analytics (+ `manifest_id`) |
+| Meter | `network_fee_usd_micros_by_manifest` | Session/usage UI analytics |
+| Feature | `network_spend` | linked to `network_fee_usd_micros` (Starter settlement) |
+| Feature | `billable_spend` | linked to `billable_usd_micros` (phase-2; unused by Starter) |
+| Plan | `clearinghouse_owner_starter` | Owner Starter: `network_spend` + `discounts.usage` + `credit_then_invoice` |
+| Plan | `clearinghouse_demo_starter` | Demo M2M Starter (same rate-card shape) |
+
+### Allowance model
+
+```text
+Usage (network_fee_usd_micros this calendar month)
+  → burns plan discounts.usage first   # included / cycle $
+  → then prepaid credits               # manual top-ups only
+Settlement mode: credit_then_invoice
+spendable ≈ remaining discounts.usage + prepaid credits
+```
+
+Starter included $ is **`discounts.usage`**, not an auto credit grant.
 
 ## Identity contract (important)
 
-The CloudEvent **`subject` is the compound `client_id:external_user_id`** (e.g.
-`demo-client:demo-user`), which is also the customer key and its single `subject_key`.
-OpenMeter attributes usage by exact subject match, and **forbids changing a customer's
-`subject_keys` once it has an active subscription** — so the subject must be compound and
-correct from creation. Break usage down per-tenant/user with the `client_id` / `external_user_id`
-meter dimensions, not by changing the subject. The scripts therefore never mutate
-`subject_keys` on existing customers; they warn if an existing customer is missing the
-expected compound key.
+OpenMeter attributes usage by exact CloudEvent `subject` match, and **forbids changing a
+customer's `subject_keys` once it has an active subscription** — so the key must be
+correct from creation. Two customer shapes:
+
+| Caller | Wire `auth_id` | CloudEvent `subject` / customer key | `--subscribe` plan |
+| --- | --- | --- | --- |
+| **M2M / managed user** | `client_id:external_user_id` | compound `client_id:external_user_id` | `clearinghouse_demo_starter` |
+| **App owner** | `client_id:owner:{users.id}` | bare `{users.id}` (shared wallet) | `clearinghouse_owner_starter` |
+
+The webhook stamps `owner:` as a **transport marker**; the collector strips it before
+egress. Break usage down per-tenant/user with the `client_id` / `external_user_id` meter
+dimensions, not by changing the subject. The scripts never mutate `subject_keys` on
+existing customers; they warn if an existing customer is missing the expected key.
+
+Identity mapping is enforced by the Bloblang in [`../collector.yaml`](../collector.yaml)
+and covered by Benthos unit tests in [`../collector_benthos_test.yaml`](../collector_benthos_test.yaml).
 
 ## Limitations
 
@@ -93,8 +131,11 @@ expected compound key.
   filter is a partial match). For very large customer bases, add pagination.
 - Features are immutable except for `unit_cost`; if an existing feature lacks a meter
   link (e.g. created with an older bootstrap), the script deletes and recreates it.
-- Subscriptions are best-effort with `--subscribe`; plan pricing changes require a new
-  plan version in Konnect (out of scope for this script).
+- Subscriptions are best-effort with `--subscribe`; plan pricing / discount changes on
+  an already-published plan require a new plan version in Konnect (out of scope).
+- No free/sandbox billing-profile attach (pymthouse uses `pymthouse-free`); Konnect orgs
+  that require a Stripe profile may need that configured once in the UI.
+- No prepaid credit grant helper yet — use the Konnect UI/API for MoonPay-style top-ups.
 
 ## Konnect first-time setup
 
