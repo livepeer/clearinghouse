@@ -182,43 +182,52 @@ To change the host signing port or bind on all interfaces, use a Compose overrid
 
 ## OpenMeter/Konnect bootstrap
 
-Provision meters, features, and the default pay-per-use plan before starting the collector.
+Provision meters, features, and Starter plans before starting the collector.
 Use the [`kongctl` bootstrap scripts](openmeter-collector/provision/README.md) or your existing Konnect setup.
+
+Aligned with pymthouse v0.3.3: Starter settles on **`network_spend`** with included
+**`discounts.usage`** ($5 default) and **`credit_then_invoice`**. Prepaid credits are
+manual top-ups only.
 
 ```bash
 cd openmeter-collector/provision
 ./bootstrap.sh catalog
-./bootstrap.sh customer demo-client demo-user "Demo User"
+./bootstrap.sh customer demo-client demo-user "Demo User" --subscribe
+./bootstrap.sh owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner" --subscribe
 ```
 
 Creates:
 
 | Object | Key | Purpose |
 | --- | --- | --- |
-| Meter | `network_fee_usd_micros` | Raw network cost from signer |
-| Meter | `billable_usd_micros` | Post-markup billable amount (collector phase 2) |
+| Meter | `network_fee_usd_micros` | Settlement + observability (network cost) |
+| Meter | `billable_usd_micros` | Phase-2 markup (not on Starter plans) |
 | Meter | `signed_ticket_count` | Request counts |
-| Feature | `network_spend` | Trial/network spend feature |
-| Feature | `billable_spend` | Billable usage feature |
-| Plan | `clearinghouse_default_ppu` | Pay-per-use rate card |
+| Meter | `fee_wei` / `billable_secs` / `network_fee_usd_micros_by_manifest` | Analytics |
+| Feature | `network_spend` | Starter settlement feature |
+| Feature | `billable_spend` | Phase-2 billable feature |
+| Plan | `clearinghouse_owner_starter` | Owner wallet Starter |
+| Plan | `clearinghouse_demo_starter` | Demo M2M Starter |
 
 Idempotent — safe to re-run.
 
-### Two-meter billing model
+### Settlement model
 
 ```text
 Signer computed_fee (wei)
-  → collector: network_fee_usd_micros   (raw network cost — observability)
-  → collector: billable_usd_micros      (network × pipeline/model markup — billing)
-       → billable_spend feature
-            → clearinghouse_default_ppu subscription per customer
+  → collector: network_fee_usd_micros   (exact fractional; settlement)
+  → collector: billable_usd_micros      (interim = network; phase-2 markup later)
+       → network_spend feature
+            → Owner / Demo Starter subscription
+                 discounts.usage (included $) then prepaid credits
 ```
 
 Collector pipeline config: [`openmeter-collector/collector.yaml`](openmeter-collector/collector.yaml).
 The collector emits `billable_usd_micros` as an interim passthrough equal to
 `network_fee_usd_micros` so the billable meter validates and accumulates. Phase-2
 markup rules (network × pipeline/model multiplier) are not applied yet — until then
-`billable_usd_micros == network_fee_usd_micros`.
+`billable_usd_micros == network_fee_usd_micros`. Starter plans bill **`network_spend`**,
+not `billable_spend`.
 
 ### Identity contract (collector)
 
@@ -227,17 +236,20 @@ Three layers — each owns a different piece of the identity story:
 | Layer | What it defines | Role of `client_id:usage_subject` |
 | --- | --- | --- |
 | **go-livepeer** | Remote-signer webhook wire protocol ([PR #3897](https://github.com/livepeer/go-livepeer/pull/3897)): webhook returns an opaque `auth_id` string; signer stores it in payment state and copies it into Kafka `create_signed_ticket` events. | go-livepeer treats `auth_id` as an opaque string — it does not parse tenant vs end user. |
-| **Clearinghouse** | Multi-tenant usage identity: `client_id` = tenant (developer app), `usage_subject` = end user within that tenant. The identity webhook joins them as `auth_id = "{client_id}:{usage_subject}"` ([`protocol.mjs`](identity-webhook/protocol.mjs)). | This compound format is a clearinghouse convention so one shared signer can attribute usage across many platform apps and their users. |
-| **OpenMeter / Konnect** | CloudEvent `subject` is the customer attribution key; each customer has `subject_keys` that must match incoming events exactly. | Bootstrap provisions customers keyed by the same compound id (e.g. `demo-client:demo-user`). The collector sets CloudEvent `subject = auth_id` so usage lands on the right customer subscription. |
+| **Clearinghouse** | Multi-tenant usage identity: `client_id` = tenant (developer app), `usage_subject` = end user within that tenant. The identity webhook joins them as `auth_id = "{client_id}:{usage_subject}"` ([`protocol.mjs`](identity-webhook/protocol.mjs)). App owners use wire `usage_subject = owner:{users.id}` as a transport marker. | This compound format is a clearinghouse convention so one shared signer can attribute usage across many platform apps and their users. |
+| **OpenMeter / Konnect** | CloudEvent `subject` is the customer attribution key; each customer has `subject_keys` that must match incoming events exactly. | M2M customers are keyed by compound id (e.g. `demo-client:demo-user`). App owners share one customer keyed by bare `{users.id}`. The collector sets CloudEvent `subject` accordingly. |
 
 Upstream Kafka events carry `auth_id` unchanged (`webhook → go-livepeer state → Kafka`). The collector parses it once (first-colon split) and emits normalized CloudEvents ([`collector.yaml`](openmeter-collector/collector.yaml)):
 
-- `subject` = compound `auth_id` (`client_id:usage_subject`) — **must** match the OpenMeter customer `subject_key`; a bare `usage_subject` will not attribute
+- **M2M / managed user:** `subject` = compound `auth_id` (`client_id:usage_subject`)
+- **App owner:** wire `auth_id = client_id:owner:{users.id}` → `subject` = bare `{users.id}` (shared wallet); `usage_subject_type = app_owner`
 - `data.client_id` = tenant (parsed from `auth_id`)
-- `data.usage_subject` = end user (parsed from `auth_id`)
-- `data.auth_id` retained for compatibility; `data.external_user_id` mirrors `usage_subject` for meter `groupBy`
+- `data.usage_subject` / `data.external_user_id` = end user id, or bare `{users.id}` for owners
+- `data.auth_id` retained for compatibility; `data.openmeter_customer_key` = billing wallet key
+- `data.eth_usd_price` = ETH/USD oracle rate (number) used for that event's Wei → USD micros conversion
+- `network_fee_usd_micros` / `billable_usd_micros` are **exact fractional** values (`fee_wei * eth_usd / 1e12`) — no per-ticket ceil. OpenMeter SUM accumulates fractions; read paths / session boundaries ceil once so dense live tickets are not overbilled. Plan unit price remains $0.000001 per micro; fractional ingest is intentional.
 
-Example egress event for `auth_id = demo-client:demo-user`:
+Example egress event for M2M `auth_id = demo-client:demo-user`:
 
 ```json
 {
@@ -245,8 +257,26 @@ Example egress event for `auth_id = demo-client:demo-user`:
   "data": {
     "client_id": "demo-client",
     "usage_subject": "demo-user",
+    "usage_subject_type": "external_user_id",
     "external_user_id": "demo-user",
-    "auth_id": "demo-client:demo-user"
+    "auth_id": "demo-client:demo-user",
+    "openmeter_customer_key": "demo-client:demo-user"
+  }
+}
+```
+
+Example egress event for app owner `auth_id = app_abc:owner:2e51154b-d296-4015-990c-02d5f16ecf1e`:
+
+```json
+{
+  "subject": "2e51154b-d296-4015-990c-02d5f16ecf1e",
+  "data": {
+    "client_id": "app_abc",
+    "usage_subject": "2e51154b-d296-4015-990c-02d5f16ecf1e",
+    "usage_subject_type": "app_owner",
+    "external_user_id": "2e51154b-d296-4015-990c-02d5f16ecf1e",
+    "auth_id": "app_abc:owner:2e51154b-d296-4015-990c-02d5f16ecf1e",
+    "openmeter_customer_key": "2e51154b-d296-4015-990c-02d5f16ecf1e"
   }
 }
 ```

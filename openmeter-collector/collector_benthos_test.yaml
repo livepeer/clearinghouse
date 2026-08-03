@@ -1,0 +1,200 @@
+# Benthos unit tests for the collector identity + fee mapping (the Bloblang that
+# actually runs in production). Companion to collector.yaml — see:
+# https://docs.redpanda.com/connect/configuration/unit_testing/
+#
+# Targets /pipeline/processors/2 (the CloudEvent mapping) and injects
+# eth_usd_price via metadata so the cache branch is not required.
+parallel: true
+tests:
+  - name: M2M compound auth_id keeps compound subject and customer key
+    target_processors: "/pipeline/processors/2"
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_GATEWAY_TOPIC: "livepeer-gateway-events"
+      OPENMETER_URL: "http://openmeter.test/events"
+      OPENMETER_API_KEY: "test"
+    input_batch:
+      - content: |
+          {
+            "type": "create_signed_ticket",
+            "data": {
+              "auth_id": "demo-client:demo-user",
+              "computed_fee": "1000000000000000",
+              "request_id": "req-m2m-1",
+              "pipeline": "live-video-to-video",
+              "model_id": "daydream-video",
+              "pixels": "1000",
+              "billable_secs": 1.5,
+              "manifest_id": "mid-1",
+              "current_time": "2026-07-24T12:00:00Z"
+            }
+          }
+        metadata:
+          eth_usd_price: "3000"
+    output_batches:
+      -
+        - json_contains:
+            subject: "demo-client:demo-user"
+            type: "create_signed_ticket"
+            id: "req-m2m-1"
+            data:
+              client_id: "demo-client"
+              usage_subject: "demo-user"
+              usage_subject_type: "external_user_id"
+              external_user_id: "demo-user"
+              auth_id: "demo-client:demo-user"
+              openmeter_customer_key: "demo-client:demo-user"
+              network_fee_usd_micros: 3000000
+              billable_usd_micros: 3000000
+              fee_wei: 1000000000000000
+              billable_secs: 1.5
+              manifest_id: "mid-1"
+              pipeline: "live-video-to-video"
+              eth_usd_price: 3000
+
+  - name: owner wire subject strips to bare CloudEvent subject and customer key
+    target_processors: "/pipeline/processors/2"
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_GATEWAY_TOPIC: "livepeer-gateway-events"
+      OPENMETER_URL: "http://openmeter.test/events"
+      OPENMETER_API_KEY: "test"
+    input_batch:
+      - content: |
+          {
+            "type": "create_signed_ticket",
+            "data": {
+              "auth_id": "app_abc:owner:2e51154b-d296-4015-990c-02d5f16ecf1e",
+              "computed_fee": "1000000000000000",
+              "request_id": "req-owner-1",
+              "billable_secs": 2,
+              "session_id": "state-xyz",
+              "current_time": "2026-07-24T12:00:00Z"
+            }
+          }
+        metadata:
+          eth_usd_price: "3000"
+    output_batches:
+      -
+        - json_contains:
+            subject: "2e51154b-d296-4015-990c-02d5f16ecf1e"
+            data:
+              client_id: "app_abc"
+              usage_subject: "2e51154b-d296-4015-990c-02d5f16ecf1e"
+              usage_subject_type: "app_owner"
+              external_user_id: "2e51154b-d296-4015-990c-02d5f16ecf1e"
+              auth_id: "app_abc:owner:2e51154b-d296-4015-990c-02d5f16ecf1e"
+              openmeter_customer_key: "2e51154b-d296-4015-990c-02d5f16ecf1e"
+              network_fee_usd_micros: 3000000
+              fee_wei: 1000000000000000
+              billable_secs: 2
+              manifest_id: "state-xyz"
+              eth_usd_price: 3000
+
+  - name: owner bare id is trimmed; upstream usage_subject_type preserved for M2M
+    target_processors: "/pipeline/processors/2"
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_GATEWAY_TOPIC: "livepeer-gateway-events"
+      OPENMETER_URL: "http://openmeter.test/events"
+      OPENMETER_API_KEY: "test"
+    input_batch:
+      - content: |
+          {
+            "type": "create_signed_ticket",
+            "data": {
+              "auth_id": "app_abc:owner: 2e51154b-d296-4015-990c-02d5f16ecf1e ",
+              "computed_fee": "1000000000000000",
+              "request_id": "req-owner-trim",
+              "current_time": "2026-07-24T12:00:00Z"
+            }
+          }
+        metadata:
+          eth_usd_price: "3000"
+      - content: |
+          {
+            "type": "create_signed_ticket",
+            "data": {
+              "auth_id": "demo-client:demo-user",
+              "usage_subject_type": "oidc_user",
+              "computed_fee": "1000000000000000",
+              "request_id": "req-oidc-1",
+              "current_time": "2026-07-24T12:00:00Z"
+            }
+          }
+        metadata:
+          eth_usd_price: "3000"
+    output_batches:
+      -
+        - json_contains:
+            subject: "2e51154b-d296-4015-990c-02d5f16ecf1e"
+            data:
+              usage_subject_type: "app_owner"
+              openmeter_customer_key: "2e51154b-d296-4015-990c-02d5f16ecf1e"
+        - json_contains:
+            subject: "demo-client:demo-user"
+            data:
+              usage_subject_type: "oidc_user"
+
+  - name: empty owner bare id is dropped
+    target_processors: "/pipeline/processors/2"
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_GATEWAY_TOPIC: "livepeer-gateway-events"
+      OPENMETER_URL: "http://openmeter.test/events"
+      OPENMETER_API_KEY: "test"
+    input_batch:
+      - content: |
+          {
+            "type": "create_signed_ticket",
+            "data": {
+              "auth_id": "app_x:owner:",
+              "computed_fee": "1",
+              "request_id": "req-empty-owner",
+              "current_time": "2026-07-24T12:00:00Z"
+            }
+          }
+        metadata:
+          eth_usd_price: "3000"
+    output_batches: []
+
+  - name: exact fractional fee micros (no per-ticket ceil)
+    target_processors: "/pipeline/processors/2"
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_GATEWAY_TOPIC: "livepeer-gateway-events"
+      OPENMETER_URL: "http://openmeter.test/events"
+      OPENMETER_API_KEY: "test"
+    input_batch:
+      - content: |
+          {
+            "type": "create_signed_ticket",
+            "data": {
+              "auth_id": "demo-client:demo-user",
+              "computed_fee": "1",
+              "request_id": "req-frac-1",
+              "current_time": "2026-07-24T12:00:00Z"
+            }
+          }
+        metadata:
+          eth_usd_price: "3000"
+    output_batches:
+      -
+        - json_contains:
+            data:
+              # 1 wei * 3000 / 1e12 = 0.000000003 (exact; ceil would be 1)
+              network_fee_usd_micros: 0.000000003
+              billable_usd_micros: 0.000000003
+              fee_wei: 1
+
+  - name: non create_signed_ticket events are dropped before mapping
+    target_processors: "/pipeline/processors/0"
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_GATEWAY_TOPIC: "livepeer-gateway-events"
+      OPENMETER_URL: "http://openmeter.test/events"
+      OPENMETER_API_KEY: "test"
+    input_batch:
+      - content: |
+          { "type": "other_event", "data": { "auth_id": "demo-client:demo-user" } }
+    output_batches: []
