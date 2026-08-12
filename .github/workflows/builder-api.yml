@@ -1,0 +1,59 @@
+# Runs only when the Go service changes. Kept out of ci.yml so the check does
+# not appear on unrelated PRs — path filters are workflow-level, not per-job,
+# so a job in ci.yml would surface on every run that workflow triggers.
+name: builder-api
+
+on:
+  pull_request:
+    paths:
+      - "openmeter-collector/builder-api/**"
+  push:
+    branches: [main]
+    paths:
+      - "openmeter-collector/builder-api/**"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: openmeter-collector/builder-api
+
+jobs:
+  builder-api:
+    name: builder-api
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      # A PR that deletes the service still matches the path filter.
+      - id: detect
+        working-directory: .
+        run: |
+          if [ -f openmeter-collector/builder-api/go.mod ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::builder-api removed - nothing to build"
+          fi
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        if: steps.detect.outputs.present == 'true'
+        with:
+          go-version-file: openmeter-collector/builder-api/go.mod
+          cache-dependency-path: openmeter-collector/builder-api/go.sum
+      - name: Format
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        if: steps.detect.outputs.present == 'true'
+        run: go vet ./...
+      - name: Build
+        if: steps.detect.outputs.present == 'true'
+        run: go build ./...
+      - name: Test
+        if: steps.detect.outputs.present == 'true'
+        run: go test ./... -count=1
