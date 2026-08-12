@@ -1,0 +1,34 @@
+{
+  "resourceServer": {
+    "name": "Livepeer Clearinghouse API",
+    "identifier": "livepeer-clearinghouse",
+    "signing_alg": "RS256",
+    "scopes": [
+      { "value": "sign:job",             "description": "Sign payment tickets for the Livepeer remote signer" },
+      { "value": "sign:mint_user_token", "description": "Mint short-lived user signer JWTs (M2M only)" },
+      { "value": "users:read",           "description": "Read provisioned application users" },
+      { "value": "users:write",          "description": "Create, update, and deactivate application users" },
+      { "value": "users:token",          "description": "Issue per-user access tokens (enables per-user billing)" },
+      { "value": "device:approve",       "description": "RFC 8693 token exchange to bind device codes (M2M only)" },
+      { "value": "admin",                "description": "Administrative access to provider surfaces" }
+    ]
+  },
+  "apps": [
+    {
+      "name": "Demo App",
+      "audience": "livepeer-clearinghouse",
+      "public": {
+        "grant_scopes": ["sign:job"],
+        "callbacks": [],
+        "initiate_login_uri": ""
+      },
+      "m2m": {
+        "grant_scopes": ["users:write", "users:token", "device:approve", "sign:job", "sign:mint_user_token"]
+      }
+    }
+  ],
+  "managementClient": {
+    "name": "Clearinghouse Builder Management",
+    "grant_scopes": ["create:users", "read:users", "update:users"]
+  }
+}

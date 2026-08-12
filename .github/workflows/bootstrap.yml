@@ -1,0 +1,53 @@
+# Shellcheck for every provisioner plus the sdk-config.json emitter test.
+# Own workflow so the check does not appear on PRs that touch no shell.
+name: bootstrap
+
+on:
+  pull_request:
+    paths:
+      - "bootstrap.sh"
+      - "testdata/**"
+      - "auth0-provisioner/**"
+      - "openmeter-collector/provision/**"
+      - "openmeter-collector/entrypoint.sh"
+  push:
+    branches: [main]
+    paths:
+      - "bootstrap.sh"
+      - "testdata/**"
+      - "auth0-provisioner/**"
+      - "openmeter-collector/provision/**"
+      - "openmeter-collector/entrypoint.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: bootstrap
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Shellcheck provisioners and orchestrator
+        run: |
+          shopt -s nullglob
+          scripts=(
+            bootstrap.sh
+            testdata/*.sh
+            auth0-provisioner/provision/*.sh
+            openmeter-collector/provision/*.sh
+            openmeter-collector/entrypoint.sh
+          )
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "::notice::no shell scripts found - skipping"
+            exit 0
+          fi
+          printf 'checking: %s\n' "${scripts[@]}"
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable "${scripts[@]}"
+      - name: sdk-config.json emitter regression test
+        run: |
+          if [ ! -x testdata/bootstrap_test.sh ]; then
+            echo "::notice::bootstrap_test.sh not present - skipping"
+            exit 0
+          fi
+          ./testdata/bootstrap_test.sh
