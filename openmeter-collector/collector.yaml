@@ -214,6 +214,23 @@ pipeline:
           }
         }
 
+    - mapping: |
+        meta client_id = this.data.client_id.or("")
+
+    # One Kong OpenMeter organization serves every tenant; customers are
+    # separated by the openmeter_customer_key contract above, not by per-tenant
+    # ingest credentials. Uses env() rather than a dollar-brace interpolation:
+    # Benthos substitutes those in the raw config text before parsing, which
+    # makes them lint-required even inside a comment.
+    - mapping: |
+        meta openmeter_url = env("OPENMETER_URL").or("")
+        meta openmeter_token = env("OPENMETER_API_KEY").or("")
+        root = if meta("openmeter_url") == "" || meta("openmeter_token") == "" {
+          throw("openmeter ingest unresolved: set OPENMETER_URL and OPENMETER_API_KEY")
+        } else {
+          this
+        }
+
     - catch:
         - log:
             level: ERROR
@@ -222,10 +239,10 @@ pipeline:
 
 output:
   http_client:
-    url: ${OPENMETER_URL}
+    url: '${! meta("openmeter_url") }'
     verb: POST
     headers:
-      Authorization: "Bearer ${OPENMETER_API_KEY}"
+      Authorization: 'Bearer ${! meta("openmeter_token") }'
       Content-Type: application/cloudevents+json
     successful_on:
       - 200
