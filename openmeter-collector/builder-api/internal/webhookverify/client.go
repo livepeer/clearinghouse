@@ -24,9 +24,9 @@ type Client struct {
 	http    *http.Client
 }
 
-// New creates a webhook verification client. baseURL points at the identity-webhook
-// service (e.g. http://identity-webhook:8090); secret is the shared WEBHOOK_SECRET.
-// A trailing /authorize is tolerated so REMOTE_SIGNER_WEBHOOK_URL can be reused directly.
+// New creates a webhook verification client. baseURL is REMOTE_SIGNER_WEBHOOK_URL
+// (e.g. http://identity-webhook:8090/authorize); secret is the shared WEBHOOK_SECRET.
+// A trailing /authorize is stripped so the client always POSTs {base}/authorize.
 func New(baseURL, secret string) *Client {
 	base := strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
 	base = strings.TrimSuffix(base, "/authorize")
