@@ -96,8 +96,30 @@ if [ "$TURNKEY_MODE" != "1" ]; then
   exec /usr/local/bin/livepeer "$@"
 fi
 
+stop_livepeer() {
+  if [ -n "${LIVEPEER_PID:-}" ] && kill -0 "$LIVEPEER_PID" 2>/dev/null; then
+    kill -s TERM "$LIVEPEER_PID" 2>/dev/null || true
+    wait "$LIVEPEER_PID" 2>/dev/null || true
+  fi
+}
+
+forward_signal() {
+  echo "entrypoint: forwarding $1 to livepeer (pid ${LIVEPEER_PID:-unset})" >&2
+  if [ -n "${LIVEPEER_PID:-}" ] && kill -0 "$LIVEPEER_PID" 2>/dev/null; then
+    kill -s "$1" "$LIVEPEER_PID" 2>/dev/null || true
+    wait "$LIVEPEER_PID"
+    status=$?
+  else
+    status=0
+  fi
+  trap - TERM INT
+  exit "$status"
+}
+
 /usr/local/bin/livepeer "$@" &
 LIVEPEER_PID=$!
+trap 'forward_signal TERM' TERM
+trap 'forward_signal INT' INT
 
 i=0
 ready_timeout="${SIGNER_READY_TIMEOUT_SECONDS:-300}"
@@ -108,7 +130,8 @@ while [ "$i" -lt "$ready_timeout" ]; do
     wait "$LIVEPEER_PID" 2>/dev/null || true
     exit 1
   fi
-  if curl -sf -X POST "http://127.0.0.1:${HTTP_PORT}/sign-orchestrator-info" \
+  if curl -sf --connect-timeout 2 --max-time 5 \
+    -X POST "http://127.0.0.1:${HTTP_PORT}/sign-orchestrator-info" \
     -H "Content-Type: application/json" \
     -d "{}" >/dev/null 2>&1; then
     ready=1
@@ -120,19 +143,13 @@ done
 
 if [ "$ready" -ne 1 ]; then
   echo "entrypoint: livepeer did not become ready on 127.0.0.1:${HTTP_PORT} within ${ready_timeout}s" >&2
-  if kill -0 "$LIVEPEER_PID" 2>/dev/null; then
-    kill "$LIVEPEER_PID" 2>/dev/null || true
-    wait "$LIVEPEER_PID" 2>/dev/null || true
-  fi
+  stop_livepeer
   exit 1
 fi
 
 if ! /usr/local/bin/cleanup-ephemeral-keystore.sh; then
   echo "entrypoint: failed to cleanup ephemeral keystore artifacts" >&2
-  if kill -0 "$LIVEPEER_PID" 2>/dev/null; then
-    kill "$LIVEPEER_PID" 2>/dev/null || true
-    wait "$LIVEPEER_PID" 2>/dev/null || true
-  fi
+  stop_livepeer
   exit 1
 fi
 

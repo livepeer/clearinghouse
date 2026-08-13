@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -13,18 +14,26 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
+func copyKeyBytes(src []byte) []byte {
+	out := make([]byte, len(src))
+	copy(out, src)
+	return out
+}
+
 func parsePrivateKeyBytes(payload []byte) ([]byte, error) {
-	trimmedBytes := []byte(strings.TrimSpace(string(payload)))
-	if len(trimmedBytes) == 32 {
-		out := make([]byte, len(trimmedBytes))
-		copy(out, trimmedBytes)
-		return out, nil
+	if len(payload) == 32 {
+		return copyKeyBytes(payload), nil
 	}
 
-	trimmed := strings.TrimSpace(string(trimmedBytes))
-	if trimmed == "" {
+	trimmedBytes := bytes.TrimSpace(payload)
+	if len(trimmedBytes) == 32 {
+		return copyKeyBytes(trimmedBytes), nil
+	}
+	if len(trimmedBytes) == 0 {
 		return nil, fmt.Errorf("exported payload is empty")
 	}
+
+	trimmed := string(trimmedBytes)
 
 	if fromJSON, ok := tryExtractPrivateKeyFromJSON(trimmed); ok {
 		return fromJSON, nil
