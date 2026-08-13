@@ -1,6 +1,6 @@
 module github.com/livepeer/clearinghouse/remote-signer/turnkey-bootstrap
 
-go 1.25.12
+go 1.25
 
 require (
 	github.com/ethereum/go-ethereum v1.17.5
