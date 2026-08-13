@@ -134,7 +134,7 @@ Canonical copy with inline comments: [`.env.example`](.env.example). Summary by 
 | --- | --- |
 | `identity-webhook` | [`identity-webhook` variables](#identity-webhook) below |
 | `kafka` | `KAFKA_ADVERTISED_ADDR` |
-| `remote-signer` | `REMOTE_SIGNER_WEBHOOK_URL`, `WEBHOOK_SECRET`, `SIGNER_*`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC` |
+| `remote-signer` | `REMOTE_SIGNER_WEBHOOK_URL`, `WEBHOOK_SECRET`, `SIGNER_*`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`, optional `TURNKEY_*` + `SIGNER_ETH_KEYSTORE_PASSWORD` (hosted) |
 | `openmeter-collector` | `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`, `OPENMETER_URL`, `OPENMETER_API_KEY`, `PRICE_ORACLE_URL`, `PRICE_ORACLE_REFRESH` |
 
 Shared keys (`WEBHOOK_SECRET`, `KAFKA_BROKERS`, `KAFKA_GATEWAY_TOPIC`) are listed once at the top of `.env.example`.
@@ -179,6 +179,22 @@ $EDITOR .env
 Set `SIGNER_ETH_KEYSTORE_PATH=/data/keystore` (container path) and `SIGNER_ETH_ADDR` to your funded signer address. If `SIGNER_ETH_KEYSTORE_PATH` is unset, the entrypoint uses `/data/keystore` when that directory exists.
 
 To change the host signing port or bind on all interfaces, use a Compose override file (see **Signing port loopback-only by default** under Design decisions).
+
+### Turnkey ephemeral keystore (hosted / Railway)
+
+Railway cannot bind-mount a keystore. When `TURNKEY_ORG_ID`, `TURNKEY_API_PUBLIC_KEY`, and `TURNKEY_API_PRIVATE_KEY` are all set, the entrypoint runs `signer-turnkey-bootstrap` (same flow as pymthouse signer-dmz): export the wallet account, write a UTC keystore under `/data`, start livepeer, then delete `/data/keystore/*` and `/data/.eth-password`.
+
+`SIGNER_ETH_KEYSTORE_PASSWORD` must be set in Turnkey mode (may be empty). Optional: `TURNKEY_WALLET_NAME` (default `livepeer-remote-signer`), `TURNKEY_API_HOST`, `SIGNER_ETH_ADDR` (pin an account). Template: [`remote-signer/config/turnkey.env.example`](remote-signer/config/turnkey.env.example).
+
+Railway injects `PORT`; the entrypoint binds go-livepeer to `0.0.0.0:$PORT`. Local Compose leaves `PORT` unset and keeps `SIGNER_PORT` (8081).
+
+```bash
+# Point the Railway service config file at deploy/remote-signer/railway.json
+# (build context = repo root). Then:
+railway up --service remote-signer --detach -m "remote signer turnkey"
+```
+
+Required Railway variables: `TURNKEY_ORG_ID`, `TURNKEY_API_PUBLIC_KEY`, `TURNKEY_API_PRIVATE_KEY`, `SIGNER_ETH_KEYSTORE_PASSWORD`, `ETH_RPC_URL`, `SIGNER_NETWORK`, `KAFKA_BROKERS` (e.g. `kafka.railway.internal:9092`), `KAFKA_GATEWAY_TOPIC`, `REMOTE_SIGNER_WEBHOOK_URL`, `WEBHOOK_SECRET`. Attach a volume at `/data` for the chain DB (keystore is ephemeral).
 
 ## OpenMeter/Konnect bootstrap
 
