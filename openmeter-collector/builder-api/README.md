@@ -23,10 +23,15 @@ resolve subject (JWT via identity-webhook, or sk_* API key)
   → response includes access_token + has_access + balance_usd_micros
 ```
 
-OpenMeter credentials are `OPENMETER_URL` + `OPENMETER_API_KEY`. The
-clearinghouse runs **one** Kong OpenMeter organization for every tenant;
-tenants are separated by customer key and the boundary is enforced in the
-admin routes, not by issuing each tenant its own Konnect credentials.
+## Shared OpenMeter organization
+
+`OPENMETER_URL` + `OPENMETER_API_KEY` are the credentials for **one** Kong
+OpenMeter organization shared by all tenants. Isolation is by customer key
+(`{clientId}:{externalUserId}`); the tenant boundary is enforced in the admin
+API, not by issuing each tenant its own Konnect credentials.
+
+There is no per-tenant lookup against `konnect-credentials`. That service is
+parked. Builder-api talks only to the shared org.
 
 ## Endpoints
 
@@ -197,7 +202,7 @@ surface on this service.
 
 | Variable | Purpose |
 | --- | --- |
-| `OPENMETER_URL` / `OPENMETER_API_KEY` | Single-org fallback |
+| `OPENMETER_URL` / `OPENMETER_API_KEY` | Shared Kong OpenMeter organization (required) |
 | `OPENMETER_DEFAULT_PLAN_KEY` | Default `clearinghouse_default_ppu` |
 | `OPENMETER_TRIAL_FEATURE_KEY` | Default `billable_spend` |
 | `OPENMETER_TRIAL_GRANT_USD_MICROS` | `0` disables auto trial grant |

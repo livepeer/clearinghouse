@@ -35,7 +35,7 @@ func main() {
 	}
 
 	minter := auth0mint.New(cfg.Auth0Issuer, cfg.Auth0Audience, cfg.SignerM2MClientID, cfg.SignerM2MSecret)
-	// One Kong OpenMeter organization serves every tenant; isolation is by
+	// One Kong OpenMeter organization, shared by all tenants. Isolation is by
 	// customer key and is enforced in the admin API.
 	omClient := openmeter.New(cfg.OpenMeterURL, cfg.OpenMeterAPIKey)
 	session := openmeter.NewSessionService(omClient)

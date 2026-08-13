@@ -9,8 +9,8 @@ import (
 // SessionService provisions customers/subscriptions and reads balance against
 // the shared OpenMeter organization.
 //
-// The clearinghouse runs one Kong OpenMeter organization for every tenant, so
-// there is a single client here rather than a per-tenant credential lookup.
+// The clearinghouse runs one Kong OpenMeter organization shared by all tenants,
+// so there is a single client here rather than a per-tenant credential lookup.
 // Tenants are separated by customer key — CustomerKey(clientID, externalUserID)
 // — and the boundary is enforced in the admin API, not by handing each tenant
 // its own Konnect credentials.
