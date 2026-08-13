@@ -11,6 +11,8 @@ TRIGGER="credentials-exchange"
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*" >&2; }
 
+command -v jq >/dev/null 2>&1 || die "jq is required"
+
 [ -f "$ACTION_CODE_FILE" ] || die "action code not found: $ACTION_CODE_FILE"
 
 # Resolve the auth0 CLI: caller-supplied AUTH0_BIN on PATH, else the local copy

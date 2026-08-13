@@ -46,8 +46,10 @@ jobs:
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable "${scripts[@]}"
       - name: sdk-config.json emitter regression test
         run: |
-          if [ ! -x testdata/bootstrap_test.sh ]; then
+          # Presence, not the executable bit: a lost file mode would silently
+          # drop this coverage. Invoked via bash for the same reason.
+          if [ ! -f testdata/bootstrap_test.sh ]; then
             echo "::notice::bootstrap_test.sh not present - skipping"
             exit 0
           fi
-          ./testdata/bootstrap_test.sh
+          bash testdata/bootstrap_test.sh

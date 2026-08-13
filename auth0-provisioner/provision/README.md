@@ -65,10 +65,15 @@ auth0 api post "client-grants" --data '{ "client_id": "...", "audience": "...", 
 ### curl
 
 ```bash
-set -a; source .env.livepeer; set +a
-PUB=$DEMO_APP_AUTH0_PUBLIC_CLIENT_ID
-curl -s -X POST "${AUTH0_ISSUER}oauth/device/code" \
-  -d "client_id=$PUB" -d "audience=$DEMO_APP_AUTH0_AUDIENCE" \
+# Read the three keys needed rather than sourcing the file: .env.livepeer holds
+# secrets and arbitrary values, and sourcing executes them in your shell.
+env_get() { sed -n "s/^$1=//p" .env.livepeer | tail -n1; }
+ISSUER="$(env_get AUTH0_ISSUER)"
+PUB="$(env_get DEMO_APP_AUTH0_PUBLIC_CLIENT_ID)"
+AUD="$(env_get DEMO_APP_AUTH0_AUDIENCE)"
+
+curl -s -X POST "${ISSUER}oauth/device/code" \
+  -d "client_id=$PUB" -d "audience=$AUD" \
   -d "scope=openid sign:job offline_access"
 # open verification_uri_complete, approve, then poll /oauth/token with the device_code grant.
 ```

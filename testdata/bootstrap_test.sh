@@ -45,4 +45,19 @@ OPENMETER_URL=x "$REPO_ROOT/bootstrap.sh" --skip-auth0 --skip-catalog --out "$WO
 [ ! -f "$WORK/pwned" ] || fail "a value in .env.livepeer was executed"
 echo "ok: .env.livepeer is parsed, not sourced"
 
+# Tenant-level Auth0 keys are written only when the provisioner could detect
+# the active tenant. A blank one must stop the run, not emit a config that
+# looks valid and fails at runtime.
+for missing in AUTH0_DOMAIN AUTH0_ISSUER AUTH0_JWKS_URL; do
+  BLANK="$(mktemp -d)"
+  grep -v "^$missing=" "$REPO_ROOT/testdata/env.livepeer.fixture" > "$BLANK/.env.livepeer"
+  if OPENMETER_URL=x "$REPO_ROOT/bootstrap.sh" --skip-auth0 --skip-catalog \
+       --out "$BLANK" >/dev/null 2>&1; then
+    rm -rf "$BLANK"; fail "missing $missing should have failed"
+  fi
+  [ ! -f "$BLANK/sdk-config.json" ] || { rm -rf "$BLANK"; fail "missing $missing still emitted sdk-config.json"; }
+  rm -rf "$BLANK"
+done
+echo "ok: blank Auth0 tenant fields rejected"
+
 echo "all bootstrap tests passed"

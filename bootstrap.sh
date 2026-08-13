@@ -122,6 +122,14 @@ PUBLIC_CLIENT_ID="$(env_get "${PREFIX}_AUTH0_PUBLIC_CLIENT_ID")"
 [ -n "$PUBLIC_CLIENT_ID" ] \
   || die "no ${PREFIX}_AUTH0_PUBLIC_CLIENT_ID in $ENV_FILE"
 
+# The tenant-level keys are written only when the provisioner could detect the
+# active Auth0 tenant. Emitting sdk-config.json with blanks here produces a file
+# that looks valid and fails at runtime, so stop instead.
+for required in AUTH0_DOMAIN AUTH0_ISSUER AUTH0_JWKS_URL; do
+  eval "value=\${$required}"
+  [ -n "$value" ] || die "no $required in $ENV_FILE — re-run Auth0 provisioning (\`auth0 tenants use <tenant>\` first) or fix the file before generating sdk-config.json"
+done
+
 jq -n \
   --arg domain "$AUTH0_DOMAIN" \
   --arg issuer "$AUTH0_ISSUER" \
