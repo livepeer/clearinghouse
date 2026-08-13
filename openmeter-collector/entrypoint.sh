@@ -23,9 +23,9 @@ load_env "${ENV_LIVEPEER_FILE:-/service/.env.livepeer}"
 : "${AUTH0_AUDIENCE:=${DEMO_APP_AUTH0_AUDIENCE:-livepeer-clearinghouse}}"
 export AUTH0_SIGNER_M2M_CLIENT_ID AUTH0_SIGNER_M2M_CLIENT_SECRET AUTH0_AUDIENCE
 
-# One Kong OpenMeter organization serves every tenant, so this is always set.
-if [ -z "${OPENMETER_URL:-}" ]; then
-  echo "entrypoint: OPENMETER_URL is required" >&2
+# One Kong OpenMeter organization serves every tenant, so these are always set.
+if [ -z "${OPENMETER_URL:-}" ] || [ -z "${OPENMETER_API_KEY:-}" ]; then
+  echo "entrypoint: OPENMETER_URL and OPENMETER_API_KEY are required" >&2
   exit 1
 fi
 
