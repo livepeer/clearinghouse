@@ -1,0 +1,45 @@
+# Runs only when the remote-signer / Turnkey bootstrap changes.
+name: remote-signer
+
+on:
+  pull_request:
+    paths:
+      - "remote-signer/**"
+      - "deploy/remote-signer/**"
+      - ".github/workflows/remote-signer.yml"
+  push:
+    branches: [main]
+    paths:
+      - "remote-signer/**"
+      - "deploy/remote-signer/**"
+      - ".github/workflows/remote-signer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  turnkey-bootstrap:
+    name: turnkey-bootstrap
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: remote-signer/turnkey-bootstrap
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: remote-signer/turnkey-bootstrap/go.mod
+          cache-dependency-path: remote-signer/turnkey-bootstrap/go.sum
+      - name: Format
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test ./... -count=1
