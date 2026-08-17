@@ -28,6 +28,7 @@ type Config struct {
 	DiscoveryURL                 string
 	APIKeyPrefix                 string
 	DemoAPIKeys                  string
+	TenantAdminKeys              string
 	// IdentityWebhookURL and WebhookSecret delegate end-user JWT verification to the
 	// identity-webhook service (POST /authorize). Same URL as go-livepeer
 	// -remoteSignerWebhookUrl (REMOTE_SIGNER_WEBHOOK_URL). JWT subject tokens require both.
@@ -59,6 +60,7 @@ func Load() (Config, error) {
 		),
 		APIKeyPrefix:       envOr("API_KEY_PREFIX", "sk_"),
 		DemoAPIKeys:        strings.TrimSpace(os.Getenv("DEMO_API_KEYS")),
+		TenantAdminKeys:    strings.TrimSpace(os.Getenv("TENANT_ADMIN_KEYS")),
 		IdentityWebhookURL: strings.TrimSpace(os.Getenv("REMOTE_SIGNER_WEBHOOK_URL")),
 		WebhookSecret:      strings.TrimSpace(os.Getenv("WEBHOOK_SECRET")),
 	}
