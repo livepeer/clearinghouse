@@ -302,7 +302,10 @@ func (c *Client) ListCustomerKeysForClient(ctx context.Context, clientID string)
 			return nil, fmt.Errorf("openmeter list customers %d: %s", resp.StatusCode, string(body))
 		}
 
-		batch := decodeCustomerList(body)
+		batch, err := decodeCustomerList(body)
+		if err != nil {
+			return nil, err
+		}
 		for _, cust := range batch {
 			if strings.HasPrefix(cust.Key, prefix) {
 				keys = append(keys, cust.Key)
@@ -315,14 +318,14 @@ func (c *Client) ListCustomerKeysForClient(ctx context.Context, clientID string)
 	return keys, nil
 }
 
-func decodeCustomerList(body []byte) []Customer {
+func decodeCustomerList(body []byte) ([]Customer, error) {
 	var page customerPage
-	if err := json.Unmarshal(body, &page); err == nil && len(page.Data) > 0 {
-		return page.Data
+	if err := json.Unmarshal(body, &page); err == nil && page.Data != nil {
+		return page.Data, nil
 	}
 	var list []Customer
 	if err := json.Unmarshal(body, &list); err == nil {
-		return list
+		return list, nil
 	}
-	return nil
+	return nil, fmt.Errorf("openmeter customers response has unexpected shape: %s", string(body))
 }
