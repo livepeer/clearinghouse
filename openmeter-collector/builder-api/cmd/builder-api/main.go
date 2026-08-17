@@ -13,6 +13,7 @@ import (
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/apikey"
 	auth0mgmt "github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/auth0mgmt"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/auth0mint"
+	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/auth0verify"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/config"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/httpapi"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/openmeter"
@@ -40,12 +41,15 @@ func main() {
 	omClient := openmeter.New(cfg.OpenMeterURL, cfg.OpenMeterAPIKey)
 	session := openmeter.NewSessionService(omClient)
 
-	// End-user JWT verification is delegated to the identity-webhook (POST /authorize).
+	// End-user JWT verification: identity-webhook when configured (Node-compatible
+	// POST /authorize), otherwise in-process Auth0 JWKS against AUTH0_ISSUER.
 	var verifier tokenexchange.UserTokenVerifier
 	if cfg.IdentityWebhookURL != "" && cfg.WebhookSecret != "" {
 		verifier = webhookverify.New(cfg.IdentityWebhookURL, cfg.WebhookSecret)
+		log.Printf("JWT subject tokens: identity-webhook at %s", cfg.IdentityWebhookURL)
 	} else {
-		log.Printf("identity-webhook not configured; JWT subject tokens will be rejected (set REMOTE_SIGNER_WEBHOOK_URL + WEBHOOK_SECRET)")
+		verifier = auth0verify.New(cfg.Auth0Issuer, cfg.Auth0Audience)
+		log.Printf("JWT subject tokens: in-process Auth0 verification (issuer=%s audience=%s)", cfg.Auth0Issuer, cfg.Auth0Audience)
 	}
 
 	demoKeys, err := apikey.LoadDemoStore(cfg.DemoAPIKeys)

@@ -28,9 +28,10 @@ type Config struct {
 	DiscoveryURL                 string
 	APIKeyPrefix                 string
 	DemoAPIKeys                  string
-	// IdentityWebhookURL and WebhookSecret delegate end-user JWT verification to the
-	// identity-webhook service (POST /authorize). Same URL as go-livepeer
-	// -remoteSignerWebhookUrl (REMOTE_SIGNER_WEBHOOK_URL). JWT subject tokens require both.
+	// IdentityWebhookURL and WebhookSecret optionally delegate end-user JWT
+	// verification to identity-webhook (POST /authorize). Same URL as go-livepeer
+	// -remoteSignerWebhookUrl (REMOTE_SIGNER_WEBHOOK_URL). When unset, JWTs are
+	// verified in-process against AUTH0_ISSUER / AUTH0_AUDIENCE.
 	IdentityWebhookURL string
 	WebhookSecret      string
 }

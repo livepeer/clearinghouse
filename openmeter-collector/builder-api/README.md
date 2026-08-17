@@ -90,23 +90,28 @@ Without this Action, minted tokens verify at Auth0 but lack identity claims and 
 Provided automatically via mounted `.env.livepeer` (`DEMO_APP_AUTH0_M2M_CLIENT_ID` /
 `DEMO_APP_AUTH0_M2M_CLIENT_SECRET`). Override in `openmeter-collector/.env` only if needed.
 
-### 5. Identity-webhook (JWT subject-token verification)
+### 5. JWT subject-token verification
 
-JWT `subject_token`s are **not** verified in-process. The Builder API forwards them to the
-[identity-webhook](../../identity-webhook) `POST /authorize` contract, which owns Auth0 JWKS
-verification and claim extraction. `sk_*` API-key subject tokens are still resolved directly
-against Auth0 `app_metadata` by the Builder API.
+By default, JWT `subject_token`s are verified **in-process** against Auth0 JWKS
+using `AUTH0_ISSUER` and `AUTH0_AUDIENCE`. Claim mapping matches device-code user
+tokens: client from `azp` (fallback `app_client_id`), subject from `sub` (fallback
+`external_user_id`). `sk_*` API-key subject tokens are still resolved directly against
+Auth0 `app_metadata`.
 
-Set both to enable JWT exchange (same vars as the remote signer):
+Optionally, set both of these to **delegate** verification to
+[identity-webhook](../../identity-webhook) `POST /authorize` instead (same contract
+Node apps already use — request/response schema unchanged):
 
 ```bash
 REMOTE_SIGNER_WEBHOOK_URL=http://identity-webhook:8090/authorize
 WEBHOOK_SECRET=...   # shared with the identity-webhook
 ```
 
-The webhook must run in `IDENTITY_AUTH_MODE=oidc` to verify JWTs. If unset, JWT subject tokens
-are rejected with `invalid_grant` (API-key exchange still works).
-
+When the webhook URL is set, it takes precedence over in-process Auth0 verification.
+The webhook must run in `IDENTITY_AUTH_MODE=oidc` with an issuer/audience that match
+the tokens you present (for Auth0: `OIDC_ISSUER=https://…auth0.com/`,
+`OIDC_AUDIENCE=livepeer-clearinghouse`). Do not point this at a first-party OIDC
+issuer (e.g. PymtHouse `/api/v1/oidc`) if subject tokens are Auth0-minted.
 ## Example: create user
 
 ```bash
