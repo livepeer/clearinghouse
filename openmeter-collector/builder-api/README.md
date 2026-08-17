@@ -10,30 +10,7 @@ Go HTTP service co-located in the `openmeter-collector` container. Provisions **
 
 Scalar docs: `GET /api/v1/docs` (spec at `/api/v1/openapi.json`).
 
-**Admin surface.** Usage queries and allowance/entitlement operations are exposed here, scoped per tenant against a single shared OpenMeter organization. See [docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md) for the boundary model and the manual prerequisites.
-
-## Admin routes
-
-Tenant-scoped. Authenticate with HTTP Basic as either the platform M2M
-credential (any tenant) or a tenant's own `clientId` + secret from
-`TENANT_ADMIN_KEYS` (that tenant only). A request for someone else's app
-answers `404`, not `403`.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/v1/apps/{clientId}/usage?meter=&from=&to=[&externalUserId=][&groupBy=]` | Metered usage, scoped to the app |
-| `GET` | `/api/v1/apps/{clientId}/users/{externalUserId}/access[?feature=]` | Allowance / entitlement balance |
-| `POST` | `/api/v1/apps/{clientId}/users/{externalUserId}/grants` | Grant allowance (`amountUsdMicros`, optional `featureKey`, `grantKey`) |
-
-```bash
-curl -u "app_abc123:$TENANT_SECRET" \
-  "$BUILDER_API/api/v1/apps/app_abc123/usage?meter=billable_usd_micros"
-```
-
-Subjects are derived from the **authorized** client id, never from caller
-input, and `externalUserId` may not contain `:`. The full model, threat
-boundary, and operator prerequisites are in
-[docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md).
+**Not a Konnect billing facade today.** Catalog, plans, and usage queries are not exposed here — builder-api only does session glue + the pre-mint allowance gate. Which service owns those operations is the open question behind issues #10 and #12.
 
 ## Token exchange flow
 
@@ -217,9 +194,9 @@ Customers are upserted with:
 
 This matches the collector CloudEvent `subject` / `auth_id` contract.
 
-Plans and rate cards are still provisioned out of band by
-`openmeter-collector/provision/bootstrap.sh`. Usage and allowance reads go
-through the admin routes above.
+Plans, meters, and usage queries: no endpoint here yet. Callers go to Kong
+directly with their own credentials until issues #10 / #12 land an admin
+surface on this service.
 
 ## Env (metering)
 
