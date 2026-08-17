@@ -1,0 +1,52 @@
+_format_version: "3.0"
+_info:
+  select_tags:
+    - clearinghouse-usage
+
+# Declarative starter for Phase C (decK). Apply only after Auth0 DCR strategy
+# and Gateway Service exist in Konnect. Replace placeholders before sync.
+#
+# Upstream: Railway builder-api.
+# Routes: usage (+ optional health). Do NOT add /oidc/token or /authorize.
+#
+# OIDC plugin values should match the portal Auth0 application auth strategy
+# (audience livepeer-clearinghouse). Prefer linking the strategy in Konnect UI
+# / API over hand-editing plugin config when both are available.
+
+services:
+  - name: clearinghouse-builder-api-usage
+    url: ${BUILDER_API_UPSTREAM}
+    tags:
+      - clearinghouse-usage
+    routes:
+      - name: usage
+        paths:
+          - /api/v1/apps
+        methods:
+          - GET
+        strip_path: false
+        tags:
+          - clearinghouse-usage
+        # Narrow further in Konnect (path regex / route matching) so only
+        # …/usage is public if the control plane supports it for your DP.
+      - name: health
+        paths:
+          - /health
+        methods:
+          - GET
+        strip_path: false
+        tags:
+          - clearinghouse-usage
+    plugins:
+      - name: openid-connect
+        tags:
+          - clearinghouse-usage
+        config:
+          # Filled from Auth0 issuer / Konnect Auth0 strategy after DCR create.
+          issuer: ${AUTH0_ISSUER}
+          auth_methods:
+            - bearer
+            - client_credentials
+          # Align with portal strategy credential_claim.
+          # consumer_claim / credential claim mapping is control-plane specific;
+          # prefer applying the strategy from Dev Portal publication.

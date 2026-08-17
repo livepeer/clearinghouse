@@ -8,7 +8,11 @@
   "servers": [
     {
       "url": "http://localhost:8095",
-      "description": "Local builder-api (openmeter-collector container)"
+      "description": "Local builder-api (Railway / direct)"
+    },
+    {
+      "url": "${KONNECT_PROXY_URL}",
+      "description": "Kong Gateway proxy (Auth0 JWT / DCR Bearer only; sk_* not accepted at the edge)"
     }
   ],
   "paths": {
@@ -132,14 +136,11 @@
     },
     "/api/v1/apps/{clientId}/usage": {
       "get": {
-        "summary": "Query metered usage for an app",
-        "description": "Subjects are derived from the authorized clientId, never from caller input. Without externalUserId every customer of the app is included.",
+        "summary": "Query own metered usage for an app",
+        "description": "Returns OpenMeter rows for the authenticated actor only. Authenticate with Bearer Auth0 user JWT (via Kong Gateway or Railway) or sk_* API key (Railway direct only). Path clientId must match the credential app. Optional externalUserId must equal the actor when set. Meters and groupBy dimensions are constrained to the provisioned catalog.",
         "security": [
           {
-            "tenantBasic": []
-          },
-          {
-            "m2mBasic": []
+            "userBearer": []
           }
         ],
         "parameters": [
@@ -156,12 +157,21 @@
             "in": "query",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "network_fee_usd_micros",
+                "billable_usd_micros",
+                "signed_ticket_count",
+                "fee_wei",
+                "billable_secs",
+                "network_fee_usd_micros_by_manifest"
+              ]
             }
           },
           {
             "name": "externalUserId",
             "in": "query",
+            "description": "Optional. When set must equal the authenticated actor.",
             "schema": {
               "type": "string"
             }
@@ -185,6 +195,7 @@
           {
             "name": "groupBy",
             "in": "query",
+            "description": "Extra catalog dimensions. client_id and external_user_id are always included server-side.",
             "schema": {
               "type": "array",
               "items": {
@@ -195,156 +206,22 @@
         ],
         "responses": {
           "200": {
-            "description": "Usage rows scoped to the app"
+            "description": "Actor-scoped usage rows"
           },
           "400": {
-            "description": "Invalid meter, time window, or externalUserId"
+            "description": "Invalid meter, groupBy, time window, or externalUserId"
           },
           "401": {
-            "description": "Missing or invalid credentials"
+            "description": "Missing or invalid Bearer credentials (including M2M Basic)"
           },
           "404": {
-            "description": "Unknown app, or the caller does not own it"
+            "description": "Path clientId does not match the credential app"
           },
           "502": {
             "description": "Metering backend unavailable"
           },
           "503": {
             "description": "Metering backend not configured"
-          }
-        }
-      }
-    },
-    "/api/v1/apps/{clientId}/users/{externalUserId}/access": {
-      "get": {
-        "summary": "Read a user's allowance / entitlement balance",
-        "security": [
-          {
-            "tenantBasic": []
-          },
-          {
-            "m2mBasic": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "clientId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "externalUserId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Must not contain ':' \u2014 customer keys are 'clientId:externalUserId'."
-          },
-          {
-            "name": "feature",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Access snapshot"
-          },
-          "400": {
-            "description": "Invalid externalUserId"
-          },
-          "401": {
-            "description": "Missing or invalid credentials"
-          },
-          "404": {
-            "description": "Unknown app, or the caller does not own it"
-          },
-          "502": {
-            "description": "Metering backend unavailable"
-          },
-          "503": {
-            "description": "Metering backend not configured"
-          }
-        }
-      }
-    },
-    "/api/v1/apps/{clientId}/users/{externalUserId}/grants": {
-      "post": {
-        "summary": "Grant a user allowance",
-        "security": [
-          {
-            "tenantBasic": []
-          },
-          {
-            "m2mBasic": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "clientId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "externalUserId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Must not contain ':' \u2014 customer keys are 'clientId:externalUserId'."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "amountUsdMicros"
-                ],
-                "properties": {
-                  "amountUsdMicros": {
-                    "type": "integer",
-                    "format": "int64",
-                    "minimum": 1
-                  },
-                  "featureKey": {
-                    "type": "string"
-                  },
-                  "grantKey": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Grant applied"
-          },
-          "400": {
-            "description": "Invalid request"
-          },
-          "401": {
-            "description": "Missing or invalid credentials"
-          },
-          "404": {
-            "description": "Unknown app, or the caller does not own it"
-          },
-          "502": {
-            "description": "Grant failed"
           }
         }
       }
@@ -360,7 +237,13 @@
       "tenantBasic": {
         "type": "http",
         "scheme": "basic",
-        "description": "Tenant admin credentials: username is the tenant clientId, password is its secret from TENANT_ADMIN_KEYS. A tenant may only address its own clientId; the platform M2M credential (m2mBasic) may address any. A request for another tenant answers 404, not 403, so that a shared OpenMeter tenant does not confirm which client ids exist."
+        "description": "Tenant admin credentials: username is the tenant clientId, password is its secret from TENANT_ADMIN_KEYS. A tenant may only address its own clientId; the platform M2M credential (m2mBasic) may address any. A request for another tenant answers 404, not 403, so that a shared OpenMeter tenant does not confirm which client ids exist. Not accepted on the usage route."
+      },
+      "userBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT or sk_*",
+        "description": "Auth0 end-user access token (JWT) or end-user API key (sk_*). Gateway ($KONNECT_PROXY_URL) accepts Auth0 JWT / DCR Bearer only; sk_* works on Railway direct. Path clientId must match the credential's app client id."
       }
     },
     "schemas": {

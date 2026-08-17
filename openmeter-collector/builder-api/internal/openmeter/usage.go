@@ -18,7 +18,7 @@ const customerPageSize = 100
 // one admin request into an unbounded walk of the customer list.
 const maxCustomerPages = 50
 
-// UsageRow is one metered window for one subject.
+// UsageRow is one metered window for one subject / group-by slice.
 type UsageRow struct {
 	Subject     string            `json:"subject"`
 	WindowStart time.Time         `json:"windowStart"`
@@ -27,11 +27,11 @@ type UsageRow struct {
 	GroupBy     map[string]string `json:"groupBy,omitempty"`
 }
 
-// UsageQuery selects a slice of usage. Subjects must already be constrained to
-// the caller's tenant; this type does no authorization of its own.
+// UsageQuery selects a slice of usage filtered by meter dimension client_id.
+// Callers must still filter rows to the authenticated actor.
 type UsageQuery struct {
 	MeterSlug string
-	Subjects  []string
+	ClientID  string
 	From      *time.Time
 	To        *time.Time
 	GroupBy   []string
@@ -79,10 +79,10 @@ type meterListItem struct {
 	Key string `json:"key"`
 }
 
-// QueryUsage reads a meter for an explicit subject list.
+// QueryUsage reads a meter for one app via filters.dimensions.client_id.
 //
-// An empty subject list returns no rows rather than querying every subject —
-// an unscoped meter query in a shared tenant would return other tenants' usage.
+// An empty client id returns no rows rather than querying every tenant —
+// an unscoped meter query in a shared org would return other apps' usage.
 //
 // Against Kong Konnect Metering & Billing this uses POST /meters/{meterId}/query
 // (ULID path + JSON body). The legacy OpenMeter Cloud GET /meters/{slug}/query
@@ -92,14 +92,8 @@ func (c *Client) QueryUsage(ctx context.Context, q UsageQuery) ([]UsageRow, erro
 	if slug == "" {
 		return nil, fmt.Errorf("meter slug is required")
 	}
-	subjects := make([]string, 0, len(q.Subjects))
-	for _, subject := range q.Subjects {
-		subject = strings.TrimSpace(subject)
-		if subject != "" {
-			subjects = append(subjects, subject)
-		}
-	}
-	if len(subjects) == 0 {
+	clientID := strings.TrimSpace(q.ClientID)
+	if clientID == "" {
 		return []UsageRow{}, nil
 	}
 
@@ -108,11 +102,34 @@ func (c *Client) QueryUsage(ctx context.Context, q UsageQuery) ([]UsageRow, erro
 		return nil, err
 	}
 
+	groupBy := make([]string, 0, len(q.GroupBy)+2)
+	seen := map[string]struct{}{}
+	addGroup := func(dim string) {
+		dim = strings.TrimSpace(dim)
+		if dim == "" || dim == "subject" {
+			return
+		}
+		if _, ok := seen[dim]; ok {
+			return
+		}
+		seen[dim] = struct{}{}
+		groupBy = append(groupBy, dim)
+	}
+	for _, g := range q.GroupBy {
+		addGroup(g)
+	}
+	for _, g := range DefaultUsageGroupBy(slug) {
+		addGroup(g)
+	}
+	if len(groupBy) == 0 {
+		groupBy = []string{"client_id", "external_user_id"}
+	}
+
 	body := meterQueryRequest{
-		GroupByDimensions: []string{"subject"},
+		GroupByDimensions: groupBy,
 		Filters: &meterQueryFilter{
 			Dimensions: map[string]meterDimFilter{
-				"subject": {In: subjects},
+				"client_id": {Eq: clientID},
 			},
 		},
 	}
@@ -121,11 +138,6 @@ func (c *Client) QueryUsage(ctx context.Context, q UsageQuery) ([]UsageRow, erro
 	}
 	if q.To != nil {
 		body.To = q.To.UTC().Format(time.RFC3339)
-	}
-	for _, g := range q.GroupBy {
-		if g = strings.TrimSpace(g); g != "" && g != "subject" {
-			body.GroupByDimensions = append(body.GroupByDimensions, g)
-		}
 	}
 
 	payload, err := json.Marshal(body)
@@ -168,10 +180,12 @@ func (c *Client) QueryUsage(ctx context.Context, q UsageQuery) ([]UsageRow, erro
 			return nil, fmt.Errorf("openmeter query meter value: %w", err)
 		}
 		subject := row.Subject
-		groupBy := row.GroupBy
-		if subject == "" && row.Dimensions != nil {
-			subject = row.Dimensions["subject"]
-			groupBy = row.Dimensions
+		groupByMap := row.GroupBy
+		if groupByMap == nil && row.Dimensions != nil {
+			groupByMap = row.Dimensions
+		}
+		if subject == "" && groupByMap != nil {
+			subject = groupByMap["subject"]
 		}
 		start, end := row.WindowStart, row.WindowEnd
 		if start.IsZero() {
@@ -185,7 +199,7 @@ func (c *Client) QueryUsage(ctx context.Context, q UsageQuery) ([]UsageRow, erro
 			WindowStart: start,
 			WindowEnd:   end,
 			Value:       value,
-			GroupBy:     groupBy,
+			GroupBy:     groupByMap,
 		})
 	}
 	return rows, nil

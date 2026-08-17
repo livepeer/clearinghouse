@@ -80,7 +80,7 @@ func main() {
 		log.Printf("OPENMETER_URL/OPENMETER_API_KEY unset; admin usage routes disabled")
 	}
 
-	srv := httpapi.NewServer(cfg, auth0Client, minter, session, tokenHandler, openAPISpec, tenantAuth, adminAPI)
+	srv := httpapi.NewServer(cfg, auth0Client, minter, session, tokenHandler, openAPISpec, tenantAuth, adminAPI, verifier, keyStore)
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Handler(),

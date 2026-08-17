@@ -63,47 +63,52 @@ this document.
 
 ## What enforces the boundary
 
-Four layers, each of which independently prevents cross-tenant reads. They are
-listed in the order a request encounters them.
+### Usage route (`GET …/usage`)
+
+Self-serve reads. Layers in request order:
 
 | # | Layer | Where | What it stops |
 |---|---|---|---|
-| 1 | Principal authentication | `internal/tenantauth` | Unknown or mismatched credentials become an unauthenticated principal that can reach nothing |
-| 2 | Path authorization | `Server.authorizeTenant` | A tenant principal addressing another tenant's `clientId` |
-| 3 | Scope construction | `handleUsage`, `handleUserAccess` | Subjects are built from the **authorized** client id, never from caller input |
-| 4 | Response filtering | `filterRowsToTenant` | A metering backend that ignores the subject filter and returns the whole meter |
+| 0 | Kong OIDC (optional edge) | Gateway + Auth0 strategy | Unauthenticated / non-Auth0 Bearer before Railway |
+| 1 | Bearer authentication | `authorizeUsageActor` | Missing Bearer, bad JWT, bad `sk_*`, or M2M Basic → 401 |
+| 2 | Path / app match | `authorizeUsageActor` | Credential app ≠ path `clientId` → 404 |
+| 3 | Catalog + actor filter query | `handleUsage` | Non-catalog meters; `externalUserId` ≠ actor → 400 |
+| 4 | Dimension scope | `QueryUsage` | Empty `client_id` never hits Konnect; wire filter is `filters.dimensions.client_id` |
+| 5 | Response filtering | `filterRowsToActor` | Backend rows for other users under the same app |
 
-Layer 3 is the one that matters most and the easiest to regress. Handlers take
-the client id from `authorizeTenant`'s **return value**, not by re-reading
-`r.PathValue("clientId")`. An authorized tenant id is therefore the only thing
-that can reach the metering layer.
+Handlers use the client id returned from auth, not a re-read of the path, before
+any metering call.
 
-### Principals
+| Principal | Credential | May read |
+|---|---|---|
+| End-user (JWT) | Auth0 access token (`Bearer`) | Own actor rows for that app |
+| End-user (`sk_*`) | API key (`Bearer`, Railway only) | Own actor rows for that app |
+
+Gateway accepts Auth0 JWT / DCR Bearer only. See [DEV-PORTAL.md](DEV-PORTAL.md)
+and [USAGE.md](USAGE.md).
+
+### User-provision route (`POST …/users`)
+
+Still HTTP Basic via `authorizeTenant` / `tenantauth`:
 
 | Principal | Credential | May address |
 |---|---|---|
-| Platform admin | `AUTH0_SIGNER_M2M_CLIENT_ID` / `AUTH0_SIGNER_M2M_CLIENT_SECRET` | any tenant |
-| Tenant admin | `clientId` / its secret from `TENANT_ADMIN_KEYS` | its own `clientId` only |
+| Platform admin | `AUTH0_SIGNER_M2M_CLIENT_ID` / secret | any tenant |
+| Tenant admin | `clientId` / secret from `TENANT_ADMIN_KEYS` | own `clientId` only |
 
-Both are HTTP Basic. Secrets are compared with `crypto/subtle`. When platform
-credentials are unset the platform path is disabled rather than matching on
-empty input, so a partially configured deployment fails closed.
+Secrets are compared with `crypto/subtle`. When platform credentials are unset
+the platform path is disabled rather than matching on empty input.
 
 ### Deliberate response choices
 
-- **Cross-tenant access returns `404`, not `403`.** A `403` would confirm that
-  another tenant's client id exists. Unknown app and forbidden app are
-  indistinguishable from outside.
-- **`externalUserId` may not contain `:`.** It becomes the second half of a
-  customer key; a colon would make the key ambiguous about where the tenant
-  ends. Rejected with `400` on both the path segment and the query parameter.
-- **Prefix matching includes the separator.** Client id `acme` matches
-  `acme:alice` and never `acme-corp:eve`.
-- **An empty subject list returns no rows** rather than querying the meter
-  unscoped, which on a shared tenant would return everyone's usage.
-- **Tenant-wide queries are bounded** — `maxUsageSubjects` (500) per request and
-  `maxCustomerPages` (50) on the customer scan.
-
+- **Cross-app access returns `404`, not `403`.** A `403` would confirm that
+  another app's client id exists.
+- **`externalUserId` on usage** must be omitted or equal the actor; `:` is
+  rejected with `400`.
+- **An empty `client_id` filter returns no rows** rather than querying the meter
+  unscoped.
+- **Public access/grants HTTP routes are removed.** Allowance remains on session
+  provision / token exchange.
 ---
 
 ## Manual prerequisite steps
@@ -151,42 +156,40 @@ Idempotent — it creates only what is missing. Meters are immutable in
 OpenMeter, so it never updates or deletes them. `bootstrap.ps1` is the
 PowerShell equivalent.
 
-### 4. Issue tenant admin credentials — per tenant
+### 4. Issue tenant admin credentials — per tenant (user provisioning)
 
 Generate a high-entropy secret per tenant and add it to `TENANT_ADMIN_KEYS`, a
-JSON object mapping client id to secret:
+JSON object mapping client id to secret. Used for `POST …/users` (not usage):
 
 ```bash
 openssl rand -hex 32
-```
-
-```bash
 TENANT_ADMIN_KEYS='{"app_abc123":"<secret>","app_def456":"<secret>"}'
 ```
 
-The tenant authenticates with HTTP Basic, username = its `clientId`:
-
 ```bash
-curl -u "app_abc123:<secret>" \
-  "https://…/api/v1/apps/app_abc123/usage?meter=billable_usd_micros"
+curl -u "app_abc123:<secret>" -H 'Content-Type: application/json' \
+  -d '{"externalUserId":"alice"}' \
+  "https://…/api/v1/apps/app_abc123/users"
 ```
 
-Leaving `TENANT_ADMIN_KEYS` unset is valid: the admin routes then accept the
-platform credential only, which is the right posture for a single-tenant or
-local deployment.
+Usage authenticates with end-user Bearer JWT / `sk_*` — see [USAGE.md](USAGE.md).
+Leaving `TENANT_ADMIN_KEYS` unset is valid: user provisioning then accepts the
+platform credential only.
 
 ### 5. Configure the service
 
 ```bash
 OPENMETER_URL=https://us.api.konghq.com/v3/openmeter
 OPENMETER_API_KEY=kpat_…            # the step-2 token
-AUTH0_SIGNER_M2M_CLIENT_ID=…        # platform admin principal
+AUTH0_SIGNER_M2M_CLIENT_ID=…        # platform admin principal (users / token exchange)
 AUTH0_SIGNER_M2M_CLIENT_SECRET=…
-TENANT_ADMIN_KEYS={"…":"…"}         # optional
+TENANT_ADMIN_KEYS={"…":"…"}         # optional; user provisioning
+REMOTE_SIGNER_WEBHOOK_URL=…         # identity-webhook for JWT verify on usage + token exchange
+WEBHOOK_SECRET=…
 ```
 
-If `OPENMETER_URL` or `OPENMETER_API_KEY` is unset the admin routes answer
-`503` rather than starting up in a state where they appear to work.
+If `OPENMETER_URL` or `OPENMETER_API_KEY` is unset the usage route answers
+`503` rather than starting up in a state where it appears to work.
 
 ---
 

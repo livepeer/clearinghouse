@@ -10,30 +10,25 @@ Go HTTP service co-located in the `openmeter-collector` container. Provisions **
 
 Scalar docs: `GET /api/v1/docs` (spec at `/api/v1/openapi.json`).
 
-**Admin surface.** Usage queries and allowance/entitlement operations are exposed here, scoped per tenant against a single shared OpenMeter organization. See [docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md) for the boundary model and [docs/USAGE.md](docs/USAGE.md) for integrator curl examples against the live API.
+**Usage surface.** End-users read their own metered usage with Bearer Auth0 JWT
+or `sk_*` (Railway). See [docs/USAGE.md](docs/USAGE.md),
+[docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md), and
+[docs/DEV-PORTAL.md](docs/DEV-PORTAL.md) for Gateway / Auth0 DCR.
 
-## Admin routes
+## Usage route
 
-Tenant-scoped. Authenticate with HTTP Basic as either the platform M2M
-credential (any tenant) or a tenant's own `clientId` + secret from
-`TENANT_ADMIN_KEYS` (that tenant only). A request for someone else's app
-answers `404`, not `403`.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/v1/apps/{clientId}/usage?meter=&from=&to=[&externalUserId=][&groupBy=]` | Metered usage, scoped to the app |
-| `GET` | `/api/v1/apps/{clientId}/users/{externalUserId}/access[?feature=]` | Allowance / entitlement balance |
-| `POST` | `/api/v1/apps/{clientId}/users/{externalUserId}/grants` | Grant allowance (`amountUsdMicros`, optional `featureKey`, `grantKey`) |
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/apps/{clientId}/usage?meter=&from=&to=[&externalUserId=][&groupBy=]` | Bearer JWT or `sk_*` | Own usage for that app |
 
 ```bash
-curl -u "app_abc123:$TENANT_SECRET" \
-  "$BUILDER_API/api/v1/apps/app_abc123/usage?meter=billable_usd_micros"
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BUILDER_API/api/v1/apps/$CLIENT_ID/usage?meter=billable_usd_micros"
 ```
 
-Subjects are derived from the **authorized** client id, never from caller
-input, and `externalUserId` may not contain `:`. The full model, threat
-boundary, and operator prerequisites are in
-[docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md).
+Path `clientId` must match the credential app. Optional `externalUserId` must
+equal the actor. HTTP Basic is rejected on this route. Public access/grants
+routes are not exposed.
 
 ## Token exchange flow
 

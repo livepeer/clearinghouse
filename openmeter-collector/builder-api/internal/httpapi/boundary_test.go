@@ -4,94 +4,93 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/apikey"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/config"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/httpapi"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/openmeter"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/tenantauth"
 )
 
-// fakeAdmin records the subjects it was asked for so tests can assert that a
-// request never reached the metering layer with another tenant's scope.
 type fakeAdmin struct {
-	lastQuery     openmeter.UsageQuery
-	lastAccessID  string
-	lastGrantID   string
-	lastLookupKey string
-	calls         int
-	// rows is returned verbatim, letting a test simulate a backend that
-	// ignores the subject filter.
+	lastQuery openmeter.UsageQuery
+	calls     int
 	rows      []openmeter.UsageRow
-	keys      map[string][]string
-	customers map[string]*openmeter.Customer
+	err       error
 }
 
 func (f *fakeAdmin) QueryUsage(_ context.Context, q openmeter.UsageQuery) ([]openmeter.UsageRow, error) {
 	f.calls++
 	f.lastQuery = q
+	if f.err != nil {
+		return nil, f.err
+	}
 	if f.rows != nil {
 		return f.rows, nil
 	}
-	rows := make([]openmeter.UsageRow, 0, len(q.Subjects))
-	for _, s := range q.Subjects {
-		rows = append(rows, openmeter.UsageRow{Subject: s, Value: 1})
+	return []openmeter.UsageRow{}, nil
+}
+
+type fakeVerifier struct {
+	clientID string
+	userID   string
+	err      error
+}
+
+func (f *fakeVerifier) VerifyUserAccessToken(_ context.Context, _, expectedClientID string) (string, string, error) {
+	if f.err != nil {
+		return "", "", f.err
 	}
-	return rows, nil
-}
-
-func (f *fakeAdmin) ListCustomerKeysForClient(_ context.Context, clientID string) ([]string, error) {
-	f.calls++
-	return f.keys[clientID], nil
-}
-
-func (f *fakeAdmin) LookupCustomerByKey(_ context.Context, key string) (*openmeter.Customer, error) {
-	f.calls++
-	f.lastLookupKey = key
-	if f.customers != nil {
-		return f.customers[key], nil
+	if expectedClientID != "" && f.clientID != "" && expectedClientID != f.clientID {
+		return "", "", errors.New("client mismatch")
 	}
-	// Default: key maps to a deterministic ULID-shaped id so handlers exercise
-	// the resolve-then-call path without each test seeding a map.
-	return &openmeter.Customer{ID: "01CUSTOMER" + strings.ReplaceAll(key, ":", ""), Key: key}, nil
-}
-
-func (f *fakeAdmin) GetAccess(_ context.Context, customerID, _ string) (*openmeter.Access, error) {
-	f.calls++
-	f.lastAccessID = customerID
-	return &openmeter.Access{HasAccess: true, BalanceUSDMicros: 42, Source: "credits"}, nil
-}
-
-func (f *fakeAdmin) EnsureTrialGrant(_ context.Context, customerID, _, _ string, _ int64) error {
-	f.calls++
-	f.lastGrantID = customerID
-	return nil
+	return f.clientID, f.userID, nil
 }
 
 const (
 	platformID     = "platform-m2m"
 	platformSecret = "platform-secret"
+	apiKeyPrefix   = "sk_"
 )
 
-func newBoundaryServer(admin httpapi.OpenMeterAdmin) http.Handler {
+func newUsageServer(admin httpapi.OpenMeterAdmin, verifier *fakeVerifier, keys *apikey.Store) http.Handler {
 	cfg := config.Config{
-		SignerM2MClientID:        platformID,
-		SignerM2MSecret:          platformSecret,
-		OpenMeterTrialFeatureKey: "network_spend",
+		SignerM2MClientID: platformID,
+		SignerM2MSecret:   platformSecret,
+		APIKeyPrefix:      apiKeyPrefix,
 	}
 	auth := tenantauth.New(platformID, platformSecret, map[string]string{
 		"tenant-a": "secret-a",
 		"tenant-b": "secret-b",
 	})
-	return httpapi.NewServer(cfg, nil, nil, nil, nil, nil, auth, admin).Handler()
+	var v interface {
+		VerifyUserAccessToken(context.Context, string, string) (string, string, error)
+	}
+	if verifier != nil {
+		v = verifier
+	}
+	return httpapi.NewServer(cfg, nil, nil, nil, nil, nil, auth, admin, v, keys).Handler()
 }
 
-func do(t *testing.T, h http.Handler, method, target, user, pass string) *httptest.ResponseRecorder {
+func doBearer(t *testing.T, h http.Handler, method, target, token string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, target, strings.NewReader(`{"amountUsdMicros":5}`))
+	req := httptest.NewRequest(method, target, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func doBasic(t *testing.T, h http.Handler, method, target, user, pass string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, target, strings.NewReader(`{"externalUserId":"alice"}`))
 	req.Header.Set("Content-Type", "application/json")
 	if user != "" || pass != "" {
 		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(user+":"+pass)))
@@ -101,242 +100,164 @@ func do(t *testing.T, h http.Handler, method, target, user, pass string) *httpte
 	return rec
 }
 
-// adminRoutes is every tenant-scoped route, used to assert the boundary holds
-// uniformly rather than on whichever route a test happened to pick.
-func adminRoutes(clientID string) []struct{ method, path string } {
-	return []struct{ method, path string }{
-		{http.MethodGet, "/api/v1/apps/" + clientID + "/usage?meter=billable_usd_micros"},
-		{http.MethodGet, "/api/v1/apps/" + clientID + "/users/alice/access"},
-		{http.MethodPost, "/api/v1/apps/" + clientID + "/users/alice/grants"},
-		{http.MethodPost, "/api/v1/apps/" + clientID + "/users"},
-	}
-}
+// jwtShape is three base64url-ish segments so resolveUsageSubject treats it as a JWT.
+const jwtShape = "aaa.bbb.ccc"
 
-func TestCrossTenantAccessIsRefusedOnEveryRoute(t *testing.T) {
-	admin := &fakeAdmin{keys: map[string][]string{"tenant-b": {"tenant-b:victim"}}}
-	h := newBoundaryServer(admin)
+func TestUsageRejectsBasicAndMissingBearer(t *testing.T) {
+	admin := &fakeAdmin{}
+	h := newUsageServer(admin, &fakeVerifier{clientID: "tenant-a", userID: "alice"}, nil)
 
-	for _, rt := range adminRoutes("tenant-b") {
-		// tenant-a authenticates correctly, then asks for tenant-b.
-		rec := do(t, h, rt.method, rt.path, "tenant-a", "secret-a")
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("%s %s: cross-tenant access returned %d, want 404", rt.method, rt.path, rec.Code)
-		}
-		if body := rec.Body.String(); strings.Contains(body, "victim") {
-			t.Errorf("%s %s: response leaked foreign data: %s", rt.method, rt.path, body)
+	for _, c := range []struct {
+		name string
+		rec  *httptest.ResponseRecorder
+	}{
+		{"no auth", doBearer(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=billable_usd_micros", "")},
+		{"basic tenant", doBasic(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=billable_usd_micros", "tenant-a", "secret-a")},
+		{"basic platform", doBasic(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=billable_usd_micros", platformID, platformSecret)},
+	} {
+		if c.rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s: got %d, want 401", c.name, c.rec.Code)
 		}
 	}
 	if admin.calls != 0 {
-		t.Errorf("cross-tenant requests reached the metering layer %d times, want 0", admin.calls)
+		t.Errorf("unauthenticated usage reached metering %d times", admin.calls)
 	}
 }
 
-func TestUnauthenticatedAndBadCredentialsAreRefused(t *testing.T) {
-	admin := &fakeAdmin{}
-	h := newBoundaryServer(admin)
-
-	for _, rt := range adminRoutes("tenant-a") {
-		for _, c := range []struct{ name, user, pass string }{
-			{"no credentials", "", ""},
-			{"wrong secret", "tenant-a", "secret-b"},
-			{"unknown tenant", "tenant-z", "secret-z"},
-		} {
-			rec := do(t, h, rt.method, rt.path, c.user, c.pass)
-			if rec.Code != http.StatusUnauthorized {
-				t.Errorf("%s %s [%s]: got %d, want 401", rt.method, rt.path, c.name, rec.Code)
-			}
-		}
-	}
-	if admin.calls != 0 {
-		t.Errorf("unauthenticated requests reached the metering layer %d times, want 0", admin.calls)
-	}
-}
-
-func TestTenantReachesOnlyItsOwnSubjects(t *testing.T) {
-	admin := &fakeAdmin{keys: map[string][]string{
-		"tenant-a": {"tenant-a:alice", "tenant-a:bob"},
-		"tenant-b": {"tenant-b:victim"},
-	}}
-	h := newBoundaryServer(admin)
-
-	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=billable_usd_micros", "tenant-a", "secret-a")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("own-tenant usage returned %d: %s", rec.Code, rec.Body.String())
-	}
-	for _, subject := range admin.lastQuery.Subjects {
-		if !strings.HasPrefix(subject, "tenant-a:") {
-			t.Errorf("query included foreign subject %q", subject)
-		}
-	}
-	if len(admin.lastQuery.Subjects) != 2 {
-		t.Errorf("expected 2 subjects, got %v", admin.lastQuery.Subjects)
-	}
-}
-
-func TestPlatformAdminMayReachAnyTenant(t *testing.T) {
-	admin := &fakeAdmin{keys: map[string][]string{"tenant-b": {"tenant-b:victim"}}}
-	h := newBoundaryServer(admin)
-
-	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-b/usage?meter=m", platformID, platformSecret)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("platform admin got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-// TestSubjectCannotBeSmuggledViaUserID covers the one input that becomes part
-// of the customer key. A colon would make "clientId:externalUserId" ambiguous
-// about where the tenant ends.
-func TestSubjectCannotBeSmuggledViaUserID(t *testing.T) {
-	admin := &fakeAdmin{}
-	h := newBoundaryServer(admin)
-
-	hostile := []string{
-		"tenant-b:victim",
-		":tenant-b",
-		"alice:",
-	}
-	for _, id := range hostile {
-		rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/users/"+id+"/access", "tenant-a", "secret-a")
-		if rec.Code != http.StatusBadRequest && rec.Code != http.StatusNotFound {
-			t.Errorf("externalUserId %q: got %d, want 400 or 404", id, rec.Code)
-		}
-		if admin.lastAccessID != "" {
-			t.Errorf("externalUserId %q reached GetAccess with %q", id, admin.lastAccessID)
-		}
-		if admin.lastLookupKey != "" && !strings.HasPrefix(admin.lastLookupKey, "tenant-a:") {
-			t.Errorf("externalUserId %q looked up out-of-tenant key %q", id, admin.lastLookupKey)
-		}
-	}
-
-	// Same via the query parameter on the usage route.
-	rec := do(t, h, http.MethodGet,
-		"/api/v1/apps/tenant-a/usage?meter=m&externalUserId=tenant-b%3Avictim", "tenant-a", "secret-a")
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("colon in externalUserId query param: got %d, want 400", rec.Code)
-	}
-}
-
-func TestAccessAndGrantResolveCustomerID(t *testing.T) {
+func TestUsageJWTHappyPath(t *testing.T) {
 	admin := &fakeAdmin{
-		customers: map[string]*openmeter.Customer{
-			"tenant-a:alice": {ID: "01ALICEULID00000000000001", Key: "tenant-a:alice"},
-		},
-	}
-	h := newBoundaryServer(admin)
-
-	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/users/alice/access", "tenant-a", "secret-a")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("access: %d %s", rec.Code, rec.Body.String())
-	}
-	if admin.lastLookupKey != "tenant-a:alice" {
-		t.Fatalf("lookup key = %q", admin.lastLookupKey)
-	}
-	if admin.lastAccessID != "01ALICEULID00000000000001" {
-		t.Fatalf("GetAccess received %q, want Konnect customer id", admin.lastAccessID)
-	}
-
-	rec = do(t, h, http.MethodPost, "/api/v1/apps/tenant-a/users/alice/grants", "tenant-a", "secret-a")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("grant: %d %s", rec.Code, rec.Body.String())
-	}
-	if admin.lastGrantID != "01ALICEULID00000000000001" {
-		t.Fatalf("EnsureTrialGrant received %q, want Konnect customer id", admin.lastGrantID)
-	}
-}
-
-func TestAccessMissingCustomerIs404(t *testing.T) {
-	admin := &fakeAdmin{customers: map[string]*openmeter.Customer{}}
-	h := newBoundaryServer(admin)
-	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/users/nobody/access", "tenant-a", "secret-a")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("got %d, want 404", rec.Code)
-	}
-	if admin.lastAccessID != "" {
-		t.Fatalf("GetAccess should not run for a missing customer")
-	}
-}
-
-// TestForeignRowsAreFilteredOut simulates a metering backend that ignores the
-// subject filter and returns the whole meter.
-func TestForeignRowsAreFilteredOut(t *testing.T) {
-	admin := &fakeAdmin{
-		keys: map[string][]string{"tenant-a": {"tenant-a:alice"}},
 		rows: []openmeter.UsageRow{
-			{Subject: "tenant-a:alice", Value: 1},
-			{Subject: "tenant-b:victim", Value: 999},
-			{Subject: "tenant-a-corp:eve", Value: 7},
-			// An aggregate row carries no tenant evidence and must not pass.
-			{Subject: "", Value: 12345},
+			{Value: 1, GroupBy: map[string]string{"client_id": "tenant-a", "external_user_id": "alice"}},
+			{Value: 9, GroupBy: map[string]string{"client_id": "tenant-a", "external_user_id": "bob"}},
+			{Value: 8, GroupBy: map[string]string{"client_id": "tenant-b", "external_user_id": "alice"}},
 		},
 	}
-	h := newBoundaryServer(admin)
+	h := newUsageServer(admin, &fakeVerifier{clientID: "tenant-a", userID: "alice"}, nil)
 
-	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=m", "tenant-a", "secret-a")
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=billable_usd_micros", jwtShape)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
 	}
+	if admin.lastQuery.ClientID != "tenant-a" {
+		t.Fatalf("query client = %q", admin.lastQuery.ClientID)
+	}
 	var body struct {
-		Rows []openmeter.UsageRow `json:"rows"`
+		Actor string               `json:"actor"`
+		Rows  []openmeter.UsageRow `json:"rows"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(body.Rows) != 1 || body.Rows[0].Subject != "tenant-a:alice" {
-		t.Fatalf("foreign rows survived filtering: %+v", body.Rows)
+	if body.Actor != "alice" {
+		t.Fatalf("actor = %q", body.Actor)
+	}
+	if len(body.Rows) != 1 || body.Rows[0].Value != 1 {
+		t.Fatalf("rows = %+v", body.Rows)
 	}
 }
 
-// TestPrefixIsMatchedOnTheSeparator stops client id "tenant-a" from also
-// matching customer keys belonging to "tenant-a-corp".
-func TestPrefixIsMatchedOnTheSeparator(t *testing.T) {
+func TestUsageCrossAppPathIs404(t *testing.T) {
 	admin := &fakeAdmin{}
-	h := newBoundaryServer(admin)
+	h := newUsageServer(admin, &fakeVerifier{clientID: "tenant-a", userID: "alice"}, nil)
 
-	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a-corp/usage?meter=m", "tenant-a", "secret-a")
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/apps/tenant-b/usage?meter=billable_usd_micros", jwtShape)
 	if rec.Code != http.StatusNotFound {
-		t.Errorf("neighbouring client id returned %d, want 404", rec.Code)
+		t.Fatalf("got %d, want 404", rec.Code)
+	}
+	if admin.calls != 0 {
+		t.Fatalf("cross-app usage reached metering")
 	}
 }
 
-func TestUnconfiguredBoundaryFailsClosed(t *testing.T) {
-	// No authenticator wired at all: routes must refuse rather than default open.
-	srv := httpapi.NewServer(config.Config{}, nil, nil, nil, nil, nil, nil, &fakeAdmin{})
-	rec := do(t, srv.Handler(), http.MethodGet,
-		"/api/v1/apps/tenant-a/usage?meter=m", platformID, platformSecret)
-	if rec.Code == http.StatusOK {
-		t.Fatalf("unconfigured boundary served a request: %d %s", rec.Code, rec.Body.String())
+func TestUsageExternalUserIdMustMatchActor(t *testing.T) {
+	admin := &fakeAdmin{}
+	h := newUsageServer(admin, &fakeVerifier{clientID: "tenant-a", userID: "alice"}, nil)
+
+	rec := doBearer(t, h, http.MethodGet,
+		"/api/v1/apps/tenant-a/usage?meter=billable_usd_micros&externalUserId=bob", jwtShape)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", rec.Code)
+	}
+	if admin.calls != 0 {
+		t.Fatalf("mismatched externalUserId reached metering")
 	}
 }
 
-// TestBoundaryEndToEndWithRealClient wires the real OpenMeter client through
-// the real handler against a fake Konnect backend, so the assertion covers the
-// wire request the metering layer actually sends — not just what the handler
-// intended.
+func TestUsageRejectsUnknownMeter(t *testing.T) {
+	admin := &fakeAdmin{}
+	h := newUsageServer(admin, &fakeVerifier{clientID: "tenant-a", userID: "alice"}, nil)
+
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=not_a_meter", jwtShape)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", rec.Code)
+	}
+}
+
+func TestUsageAPIKeyHappyPath(t *testing.T) {
+	admin := &fakeAdmin{
+		rows: []openmeter.UsageRow{
+			{Value: 3, GroupBy: map[string]string{"client_id": "tenant-a", "external_user_id": "alice"}},
+		},
+	}
+	keys, err := apikey.LoadDemoStore(`{"sk_test_alice":{"clientId":"tenant-a","userId":"alice"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &apikey.Store{Prefix: apiKeyPrefix, Demo: keys}
+	h := newUsageServer(admin, nil, store)
+
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=billable_usd_micros", "sk_test_alice")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(admin.lastQuery.ClientID) == 0 {
+		t.Fatal("expected client filter")
+	}
+}
+
+func TestCreateUserStillUsesTenantBasic(t *testing.T) {
+	h := newUsageServer(&fakeAdmin{}, nil, nil)
+	rec := doBasic(t, h, http.MethodPost, "/api/v1/apps/tenant-b/users", "tenant-a", "secret-a")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant create user got %d, want 404", rec.Code)
+	}
+	rec = doBasic(t, h, http.MethodPost, "/api/v1/apps/tenant-a/users", "", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("create user without Basic got %d, want 401", rec.Code)
+	}
+}
+
+func TestAccessAndGrantsRoutesRemoved(t *testing.T) {
+	h := newUsageServer(&fakeAdmin{}, &fakeVerifier{clientID: "tenant-a", userID: "alice"}, nil)
+	for _, path := range []string{
+		"/api/v1/apps/tenant-a/users/alice/access",
+		"/api/v1/apps/tenant-a/users/alice/grants",
+	} {
+		rec := doBearer(t, h, http.MethodGet, path, jwtShape)
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			// POST grants
+			rec = doBasic(t, h, http.MethodPost, path, "tenant-a", "secret-a")
+		}
+		if rec.Code == http.StatusOK {
+			t.Fatalf("%s still served OK", path)
+		}
+	}
+}
+
 func TestBoundaryEndToEndWithRealClient(t *testing.T) {
-	customers := []openmeter.Customer{
-		{Key: "tenant-a:alice"},
-		{Key: "tenant-b:victim"},
-	}
-	var meterQueries []([]string)
+	var meterQueries []string
 
 	konnect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/meters":
-			// Konnect resolves meter key → ULID before POST /meters/{id}/query.
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": []map[string]any{{"id": "01METERTEST000000000000001", "key": "billable_usd_micros"}},
 			})
-		case strings.HasPrefix(r.URL.Path, "/customers"):
-			if r.URL.Query().Get("page") != "1" {
-				_, _ = w.Write([]byte(`{"data":[]}`))
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": customers})
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/query"):
 			var body struct {
 				Filters struct {
 					Dimensions map[string]struct {
-						In []string `json:"in"`
+						Eq string `json:"eq"`
 					} `json:"dimensions"`
 				} `json:"filters"`
 			}
@@ -345,72 +266,61 @@ func TestBoundaryEndToEndWithRealClient(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			subjects := body.Filters.Dimensions["subject"].In
-			meterQueries = append(meterQueries, subjects)
-			rows := []map[string]any{}
-			for _, s := range subjects {
-				rows = append(rows, map[string]any{
-					"value":      "1",
-					"from":       "2026-01-01T00:00:00Z",
-					"to":         "2026-01-02T00:00:00Z",
-					"dimensions": map[string]string{"subject": s},
-				})
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": rows})
+			clientID := body.Filters.Dimensions["client_id"].Eq
+			meterQueries = append(meterQueries, clientID)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{
+						"value": "1",
+						"from":  "2026-01-01T00:00:00Z",
+						"to":    "2026-01-02T00:00:00Z",
+						"dimensions": map[string]string{
+							"client_id":        "tenant-a",
+							"external_user_id": "alice",
+						},
+					},
+					{
+						"value": "999",
+						"from":  "2026-01-01T00:00:00Z",
+						"to":    "2026-01-02T00:00:00Z",
+						"dimensions": map[string]string{
+							"client_id":        "tenant-a",
+							"external_user_id": "victim",
+						},
+					},
+				},
+			})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer konnect.Close()
 
-	cfg := config.Config{SignerM2MClientID: platformID, SignerM2MSecret: platformSecret}
-	auth := tenantauth.New(platformID, platformSecret, map[string]string{"tenant-a": "secret-a"})
-	h := httpapi.NewServer(cfg, nil, nil, nil, nil, nil, auth, openmeter.New(konnect.URL, "kpat_test")).Handler()
+	cfg := config.Config{APIKeyPrefix: apiKeyPrefix}
+	h := httpapi.NewServer(
+		cfg, nil, nil, nil, nil, nil, nil,
+		openmeter.New(konnect.URL, "kpat_test"),
+		&fakeVerifier{clientID: "tenant-a", userID: "alice"},
+		nil,
+	).Handler()
 
-	// tenant-a reads its own app: only its own subject reaches the backend,
-	// even though the shared org contains tenant-b's customer.
-	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=billable_usd_micros", "tenant-a", "secret-a")
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=billable_usd_micros", jwtShape)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("own-tenant read: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("own usage: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(meterQueries) != 1 || meterQueries[0] != "tenant-a" {
+		t.Fatalf("backend client filter = %v", meterQueries)
 	}
 	if strings.Contains(rec.Body.String(), "victim") {
-		t.Fatalf("response leaked another tenant's subject: %s", rec.Body.String())
-	}
-	if len(meterQueries) != 1 || len(meterQueries[0]) != 1 || meterQueries[0][0] != "tenant-a:alice" {
-		t.Fatalf("backend received subjects %v, want exactly [tenant-a:alice]", meterQueries)
+		t.Fatalf("response leaked another actor: %s", rec.Body.String())
 	}
 
-	// tenant-a reads tenant-b: refused before any backend call.
 	before := len(meterQueries)
-	rec = do(t, h, http.MethodGet, "/api/v1/apps/tenant-b/usage?meter=billable_usd_micros", "tenant-a", "secret-a")
+	rec = doBearer(t, h, http.MethodGet, "/api/v1/apps/tenant-b/usage?meter=billable_usd_micros", jwtShape)
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("cross-tenant read returned %d, want 404", rec.Code)
+		t.Fatalf("cross-app got %d, want 404", rec.Code)
 	}
 	if len(meterQueries) != before {
-		t.Fatalf("cross-tenant read reached the metering backend: %v", meterQueries)
-	}
-}
-
-// TestGrantResponseAmountIsANumber pins amountUsdMicros as a JSON number. It
-// was serialised with strconv.FormatInt, which contradicted the request schema
-// and would break any client decoding it as an integer.
-func TestGrantResponseAmountIsANumber(t *testing.T) {
-	h := newBoundaryServer(&fakeAdmin{})
-	rec := do(t, h, http.MethodPost,
-		"/api/v1/apps/tenant-a/users/alice/grants", "tenant-a", "secret-a")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got := string(raw["amountUsdMicros"]); got != "5" {
-		t.Fatalf("amountUsdMicros = %s, want the number 5", got)
-	}
-	var n int64
-	if err := json.Unmarshal(raw["amountUsdMicros"], &n); err != nil {
-		t.Fatalf("amountUsdMicros is not decodable as an integer: %v", err)
+		t.Fatalf("cross-app reached metering: %v", meterQueries)
 	}
 }
