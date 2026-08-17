@@ -18,14 +18,16 @@ import (
 // fakeAdmin records the subjects it was asked for so tests can assert that a
 // request never reached the metering layer with another tenant's scope.
 type fakeAdmin struct {
-	lastQuery    openmeter.UsageQuery
-	lastAccessID string
-	lastGrantID  string
-	calls        int
+	lastQuery      openmeter.UsageQuery
+	lastAccessID   string
+	lastGrantID    string
+	lastLookupKey  string
+	calls          int
 	// rows is returned verbatim, letting a test simulate a backend that
 	// ignores the subject filter.
-	rows []openmeter.UsageRow
-	keys map[string][]string
+	rows      []openmeter.UsageRow
+	keys      map[string][]string
+	customers map[string]*openmeter.Customer
 }
 
 func (f *fakeAdmin) QueryUsage(_ context.Context, q openmeter.UsageQuery) ([]openmeter.UsageRow, error) {
@@ -44,6 +46,17 @@ func (f *fakeAdmin) QueryUsage(_ context.Context, q openmeter.UsageQuery) ([]ope
 func (f *fakeAdmin) ListCustomerKeysForClient(_ context.Context, clientID string) ([]string, error) {
 	f.calls++
 	return f.keys[clientID], nil
+}
+
+func (f *fakeAdmin) LookupCustomerByKey(_ context.Context, key string) (*openmeter.Customer, error) {
+	f.calls++
+	f.lastLookupKey = key
+	if f.customers != nil {
+		return f.customers[key], nil
+	}
+	// Default: key maps to a deterministic ULID-shaped id so handlers exercise
+	// the resolve-then-call path without each test seeding a map.
+	return &openmeter.Customer{ID: "01CUSTOMER" + strings.ReplaceAll(key, ":", ""), Key: key}, nil
 }
 
 func (f *fakeAdmin) GetAccess(_ context.Context, customerID, _ string) (*openmeter.Access, error) {
@@ -187,8 +200,11 @@ func TestSubjectCannotBeSmuggledViaUserID(t *testing.T) {
 		if rec.Code != http.StatusBadRequest && rec.Code != http.StatusNotFound {
 			t.Errorf("externalUserId %q: got %d, want 400 or 404", id, rec.Code)
 		}
-		if admin.lastAccessID != "" && !strings.HasPrefix(admin.lastAccessID, "tenant-a:") {
-			t.Errorf("externalUserId %q produced out-of-tenant customer key %q", id, admin.lastAccessID)
+		if admin.lastAccessID != "" {
+			t.Errorf("externalUserId %q reached GetAccess with %q", id, admin.lastAccessID)
+		}
+		if admin.lastLookupKey != "" && !strings.HasPrefix(admin.lastLookupKey, "tenant-a:") {
+			t.Errorf("externalUserId %q looked up out-of-tenant key %q", id, admin.lastLookupKey)
 		}
 	}
 
@@ -197,6 +213,46 @@ func TestSubjectCannotBeSmuggledViaUserID(t *testing.T) {
 		"/api/v1/apps/tenant-a/usage?meter=m&externalUserId=tenant-b%3Avictim", "tenant-a", "secret-a")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("colon in externalUserId query param: got %d, want 400", rec.Code)
+	}
+}
+
+func TestAccessAndGrantResolveCustomerID(t *testing.T) {
+	admin := &fakeAdmin{
+		customers: map[string]*openmeter.Customer{
+			"tenant-a:alice": {ID: "01ALICEULID00000000000001", Key: "tenant-a:alice"},
+		},
+	}
+	h := newBoundaryServer(admin)
+
+	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/users/alice/access", "tenant-a", "secret-a")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("access: %d %s", rec.Code, rec.Body.String())
+	}
+	if admin.lastLookupKey != "tenant-a:alice" {
+		t.Fatalf("lookup key = %q", admin.lastLookupKey)
+	}
+	if admin.lastAccessID != "01ALICEULID00000000000001" {
+		t.Fatalf("GetAccess received %q, want Konnect customer id", admin.lastAccessID)
+	}
+
+	rec = do(t, h, http.MethodPost, "/api/v1/apps/tenant-a/users/alice/grants", "tenant-a", "secret-a")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("grant: %d %s", rec.Code, rec.Body.String())
+	}
+	if admin.lastGrantID != "01ALICEULID00000000000001" {
+		t.Fatalf("EnsureTrialGrant received %q, want Konnect customer id", admin.lastGrantID)
+	}
+}
+
+func TestAccessMissingCustomerIs404(t *testing.T) {
+	admin := &fakeAdmin{customers: map[string]*openmeter.Customer{}}
+	h := newBoundaryServer(admin)
+	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/users/nobody/access", "tenant-a", "secret-a")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want 404", rec.Code)
+	}
+	if admin.lastAccessID != "" {
+		t.Fatalf("GetAccess should not run for a missing customer")
 	}
 }
 

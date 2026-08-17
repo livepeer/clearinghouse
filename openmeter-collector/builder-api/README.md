@@ -10,7 +10,7 @@ Go HTTP service co-located in the `openmeter-collector` container. Provisions **
 
 Scalar docs: `GET /api/v1/docs` (spec at `/api/v1/openapi.json`).
 
-**Admin surface.** Usage queries and allowance/entitlement operations are exposed here, scoped per tenant against a single shared OpenMeter organization. See [docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md) for the boundary model and the manual prerequisites.
+**Admin surface.** Usage queries and allowance/entitlement operations are exposed here, scoped per tenant against a single shared OpenMeter organization. See [docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md) for the boundary model and [docs/USAGE.md](docs/USAGE.md) for integrator curl examples against the live API.
 
 ## Admin routes
 

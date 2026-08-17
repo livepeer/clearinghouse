@@ -82,7 +82,7 @@ that can reach the metering layer.
 
 | Principal | Credential | May address |
 |---|---|---|
-| Platform admin | `SIGNER_M2M_CLIENT_ID` / `SIGNER_M2M_SECRET` | any tenant |
+| Platform admin | `AUTH0_SIGNER_M2M_CLIENT_ID` / `AUTH0_SIGNER_M2M_CLIENT_SECRET` | any tenant |
 | Tenant admin | `clientId` / its secret from `TENANT_ADMIN_KEYS` | its own `clientId` only |
 
 Both are HTTP Basic. Secrets are compared with `crypto/subtle`. When platform
@@ -180,8 +180,8 @@ local deployment.
 ```bash
 OPENMETER_URL=https://us.api.konghq.com/v3/openmeter
 OPENMETER_API_KEY=kpat_…            # the step-2 token
-SIGNER_M2M_CLIENT_ID=…              # platform admin principal
-SIGNER_M2M_SECRET=…
+AUTH0_SIGNER_M2M_CLIENT_ID=…        # platform admin principal
+AUTH0_SIGNER_M2M_CLIENT_SECRET=…
 TENANT_ADMIN_KEYS={"…":"…"}         # optional
 ```
 

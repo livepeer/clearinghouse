@@ -15,6 +15,7 @@ import (
 type OpenMeterAdmin interface {
 	QueryUsage(ctx context.Context, q openmeter.UsageQuery) ([]openmeter.UsageRow, error)
 	ListCustomerKeysForClient(ctx context.Context, clientID string) ([]string, error)
+	LookupCustomerByKey(ctx context.Context, key string) (*openmeter.Customer, error)
 	GetAccess(ctx context.Context, customerID, featureKey string) (*openmeter.Access, error)
 	EnsureTrialGrant(ctx context.Context, customerID, featureKey, grantKey string, amountMicros int64) error
 }
@@ -56,6 +57,21 @@ func (s *Server) authorizeTenant(w http.ResponseWriter, r *http.Request) (string
 		return "", false
 	}
 	return pathClientID, true
+}
+
+// resolveCustomerID maps a customer key to the Konnect ULID that credit and
+// entitlement routes require. Usage queries key by subject and do not need this.
+func (s *Server) resolveCustomerID(w http.ResponseWriter, r *http.Request, customerKey string) (string, bool) {
+	customer, err := s.admin.LookupCustomerByKey(r.Context(), customerKey)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "customer lookup failed")
+		return "", false
+	}
+	if customer == nil || strings.TrimSpace(customer.ID) == "" {
+		writeAPIError(w, http.StatusNotFound, "customer not found")
+		return "", false
+	}
+	return customer.ID, true
 }
 
 // externalUserIDFromPath validates the user segment. A colon is rejected
@@ -202,7 +218,11 @@ func (s *Server) handleUserAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	customerKey := openmeter.CustomerKey(clientID, externalUserID)
-	access, err := s.admin.GetAccess(r.Context(), customerKey, featureKey)
+	customerID, ok := s.resolveCustomerID(w, r, customerKey)
+	if !ok {
+		return
+	}
+	access, err := s.admin.GetAccess(r.Context(), customerID, featureKey)
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, "access lookup failed")
 		return
@@ -264,7 +284,11 @@ func (s *Server) handleGrantAllowance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	customerKey := openmeter.CustomerKey(clientID, externalUserID)
-	if err := s.admin.EnsureTrialGrant(r.Context(), customerKey, featureKey, grantKey, body.AmountMicros); err != nil {
+	customerID, ok := s.resolveCustomerID(w, r, customerKey)
+	if !ok {
+		return
+	}
+	if err := s.admin.EnsureTrialGrant(r.Context(), customerID, featureKey, grantKey, body.AmountMicros); err != nil {
 		writeAPIError(w, http.StatusBadGateway, "grant failed")
 		return
 	}
