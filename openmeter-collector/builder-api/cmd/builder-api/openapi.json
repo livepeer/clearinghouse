@@ -267,6 +267,9 @@
           },
           "502": {
             "description": "Metering backend unavailable"
+          },
+          "503": {
+            "description": "Metering backend not configured"
           }
         }
       }
