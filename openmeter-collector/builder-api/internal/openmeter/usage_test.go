@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -37,10 +38,23 @@ func TestQueryUsageRefusesEmptySubjectList(t *testing.T) {
 }
 
 func TestQueryUsageSendsEverySubject(t *testing.T) {
-	var got []string
+	var gotMethod, gotPath string
+	var gotBody meterQueryRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.URL.Query()["subject"]
-		_, _ = w.Write([]byte(`{"data":[{"subject":"a:1","value":2}]}`))
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/meters") && !strings.Contains(r.URL.Path, "/query"):
+			_, _ = w.Write([]byte(`{"data":[{"id":"01METERTEST000000000000001","key":"billable_usd_micros"}]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/query"):
+			gotMethod = r.Method
+			gotPath = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"data":[{"value":"2","from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:00:00Z","dimensions":{"subject":"a:1"}}]}`))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	defer srv.Close()
 
@@ -51,10 +65,14 @@ func TestQueryUsageSendsEverySubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if len(got) != 2 || got[0] != "a:1" || got[1] != "a:2" {
-		t.Fatalf("subject params = %v", got)
+	if gotMethod != http.MethodPost || gotPath != "/meters/01METERTEST000000000000001/query" {
+		t.Fatalf("request = %s %s", gotMethod, gotPath)
 	}
-	if len(rows) != 1 || rows[0].Value != 2 {
+	in := gotBody.Filters.Dimensions["subject"].In
+	if len(in) != 2 || in[0] != "a:1" || in[1] != "a:2" {
+		t.Fatalf("subject filter = %v", in)
+	}
+	if len(rows) != 1 || rows[0].Value != 2 || rows[0].Subject != "a:1" {
 		t.Fatalf("rows = %+v", rows)
 	}
 }
