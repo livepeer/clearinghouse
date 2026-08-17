@@ -63,6 +63,13 @@ cd openmeter-collector/provision
 # Catalog + customer; --subscribe attaches the role-appropriate Starter plan.
 ./bootstrap.sh all demo-client demo-user "Demo User" --subscribe
 ./bootstrap.sh owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner" --subscribe
+
+# Dev Portal Auth0 DCR + publish (idempotent by name).
+# Requires AUTH0_DCR_* / DEMO_APP_AUTH0_M2M_* in repo-root .env — see .env.example and
+# openmeter-collector/builder-api/docs/DEV-PORTAL.md
+./bootstrap.sh auth0-dcr       # Auth0 M2M + Management grant (auth0 CLI)
+./bootstrap.sh portal-dcr      # Konnect DCR provider + auth strategy
+./bootstrap.sh portal-publish  # portal + usage API + publish with auth_strategy_ids
 ```
 
 Windows (PowerShell):
@@ -72,10 +79,12 @@ Windows (PowerShell):
 .\bootstrap.ps1 customer demo-client demo-user "Demo User"
 .\bootstrap.ps1 owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner"
 .\bootstrap.ps1 all demo-client demo-user "Demo User" -Subscribe
+# portal-dcr is bash-only for now (./bootstrap.sh portal-dcr)
 ```
 
 Both scripts are safe to re-run: existing meters are left untouched; features missing
 a meter link are recreated; plans are created and published when no active version exists.
+`portal-dcr` skips create when a provider/strategy with the same name already exists.
 
 ## What it provisions
 

@@ -26,6 +26,18 @@
 #       after the collector strips the owner: wire prefix from auth_id).
 #       --subscribe uses the Owner Starter plan (network_spend + discounts.usage).
 #
+#   ./bootstrap.sh auth0-dcr
+#       Ensure Auth0 API audience + M2M "Konnect Portal DCR Admin" + Management
+#       API client grant (Auth0 CLI). Exports AUTH0_DCR_* for portal-dcr.
+#
+#   ./bootstrap.sh portal-dcr
+#       Ensure Auth0 DCR provider + openid_connect application auth strategy on
+#       Konnect (idempotent by name). Auto-runs auth0-dcr when credentials unset.
+#
+#   ./bootstrap.sh portal-publish
+#       Create/find Dev Portal + usage API, upload OpenAPI, publish with the
+#       Auth0 DCR auth strategy (runs portal-dcr if strategy missing).
+#
 #   ./bootstrap.sh all <client_id> <external_user_id> [display_name] [--subscribe]
 #       catalog + customer in one run.
 #
@@ -456,6 +468,598 @@ ensure_subscription() {
   fi
 }
 
+# --- Auth0 DCR admin (Management API M2M) ----------------------------------
+# Provisions the Auth0-side prerequisites from
+# https://developer.konghq.com/how-to/auth0-dcr/ using the Auth0 CLI.
+# Requires: auth0 login (interactive or machine credentials).
+
+AUTH0_DCR_MGMT_SCOPES=(
+  read:client_grants create:client_grants delete:client_grants update:client_grants
+  read:clients create:clients delete:clients update:clients
+  update:client_keys
+)
+
+auth0_domain() {
+  local d
+  d="$(trim "${AUTH0_DOMAIN:-}")"
+  if [ -z "$d" ]; then
+    d="$(trim "${AUTH0_DCR_ISSUER:-${AUTH0_ISSUER:-}}")"
+    d="${d#https://}"
+    d="${d#http://}"
+    d="${d%%/*}"
+  fi
+  # Fall back to the Auth0 CLI's active tenant (auth0 login).
+  if [ -z "$d" ] && command -v auth0 >/dev/null 2>&1; then
+    d="$(auth0 tenants list --json-compact --no-input 2>/dev/null \
+      | jq -r '(.[] | select(.active == true) | .name) // .[0].name // empty' | head -n 1)"
+    d="$(trim "$d")"
+  fi
+  printf '%s' "$d"
+}
+
+auth0_issuer_url() {
+  local d; d="$(auth0_domain)"
+  [ -n "$d" ] || die "AUTH0_DOMAIN or AUTH0_DCR_ISSUER / AUTH0_ISSUER is required"
+  printf 'https://%s' "$d"
+}
+
+auth0_mgmt_audience() {
+  printf '%s/api/v2/' "$(auth0_issuer_url)"
+}
+
+ensure_auth0_api_audience() {
+  local audience="$1" name="${2:-Livepeer Clearinghouse}"
+  local existing
+  existing="$(auth0 apis list --json-compact --no-input 2>/dev/null \
+    | jq -c --arg id "$audience" '.[] | select(.identifier == $id)' | head -n 1)"
+  if [ -n "$existing" ]; then
+    info "api     $audience — exists"
+    return 0
+  fi
+  auth0 apis create \
+    --name "$name" \
+    --identifier "$audience" \
+    --offline-access=false \
+    --signing-alg RS256 \
+    --no-input --json-compact >/dev/null
+  info "api     $audience — created"
+}
+
+find_auth0_app_by_name() {
+  local name="$1"
+  auth0 apps list --json-compact --no-input 2>/dev/null \
+    | jq -c --arg n "$name" '.[] | select(.name == $n)' | head -n 1
+}
+
+ensure_auth0_dcr_mgmt_grant() {
+  local client_id="$1"
+  local audience; audience="$(auth0_mgmt_audience)"
+  local scopes_csv grants grant_id missing payload
+  scopes_csv="$(IFS=,; echo "${AUTH0_DCR_MGMT_SCOPES[*]}")"
+  if [ "${AUTH0_DCR_USE_DEVELOPER_MANAGED_SCOPES:-0}" = "1" ]; then
+    scopes_csv="${scopes_csv},read:resource_servers"
+  fi
+
+  grants="$(auth0 api get client-grants --no-input 2>/dev/null || true)"
+  grant_id="$(printf '%s' "$grants" | jq -r --arg c "$client_id" --arg a "$audience" '
+    .[] | select(.client_id == $c and .audience == $a) | .id' | head -n 1)"
+
+  if [ -n "$grant_id" ]; then
+    missing="$(printf '%s' "$grants" | jq -r --arg id "$grant_id" --arg csv "$scopes_csv" '
+      ($csv | split(",") | map(gsub("^\\s+|\\s+$";""))) as $need
+      | (.[] | select(.id == $id) | .scope) as $have
+      | ($need - $have) | .[]
+    ')"
+    if [ -z "$missing" ]; then
+      info "grant   Management API — exists for $client_id"
+      return 0
+    fi
+    # Replace scope list with union of existing + required.
+    payload="$(printf '%s' "$grants" | jq -c --arg id "$grant_id" --arg csv "$scopes_csv" '
+      ($csv | split(",") | map(gsub("^\\s+|\\s+$";""))) as $need
+      | (.[] | select(.id == $id) | .scope) as $have
+      | {scope: (($have + $need) | unique)}
+    ')"
+    auth0 api patch "client-grants/$grant_id" --data "$payload" --no-input >/dev/null
+    info "grant   Management API — updated scopes for $client_id"
+    return 0
+  fi
+
+  payload="$(jq -n --arg c "$client_id" --arg a "$audience" --arg csv "$scopes_csv" '
+    {
+      client_id: $c,
+      audience: $a,
+      scope: ($csv | split(",") | map(gsub("^\\s+|\\s+$";"")))
+    }')"
+  auth0 api post client-grants --data "$payload" --no-input >/dev/null
+  info "grant   Management API — created for $client_id"
+}
+
+# Sets AUTH0_DCR_CLIENT_ID / AUTH0_DCR_CLIENT_SECRET / AUTH0_DCR_ISSUER in the
+# current shell environment.
+#
+# Demo default: reuse DEMO_APP_AUTH0_M2M_* (one M2M for signer mint + Konnect DCR)
+# when those are set. Set AUTH0_DCR_DEDICATED=1 to force a separate
+# "Konnect Portal DCR Admin" app (least privilege for production).
+cmd_auth0_dcr() {
+  command -v auth0 >/dev/null 2>&1 || die "auth0 CLI not found (brew install auth0/auth0-cli/auth0)"
+  command -v jq >/dev/null 2>&1 || die "jq not found"
+
+  local app_name audience issuer domain client_id client_secret app created
+  local demo_id demo_secret dedicated
+  audience="$(trim "${AUTH0_DCR_AUDIENCE:-${AUTH0_AUDIENCE:-${DEMO_APP_AUTH0_AUDIENCE:-livepeer-clearinghouse}}}")"
+  issuer="$(auth0_issuer_url)"
+  domain="$(auth0_domain)"
+  demo_id="$(trim "${DEMO_APP_AUTH0_M2M_CLIENT_ID:-${AUTH0_SIGNER_M2M_CLIENT_ID:-}}")"
+  demo_secret="$(trim "${DEMO_APP_AUTH0_M2M_CLIENT_SECRET:-${AUTH0_SIGNER_M2M_CLIENT_SECRET:-}}")"
+  dedicated="${AUTH0_DCR_DEDICATED:-0}"
+  app_name="$(trim "${AUTH0_DCR_APP_NAME:-Konnect Portal DCR Admin}")"
+
+  info "== auth0-dcr ($domain) =="
+  info "audience $audience  (portal / Gateway token audience)"
+  info "mgmt     $(auth0_mgmt_audience)  (DCR admin client grant)"
+
+  ensure_auth0_api_audience "$audience" "Livepeer Clearinghouse"
+
+  if [ "$dedicated" != "1" ] && [ -n "$demo_id" ] && [ -n "$demo_secret" ]; then
+    client_id="$demo_id"
+    client_secret="$demo_secret"
+    info "m2m     reusing Demo/signer M2M ($client_id) for DCR admin"
+    info "         (set AUTH0_DCR_DEDICATED=1 for a separate least-privilege app)"
+  else
+    app="$(find_auth0_app_by_name "$app_name" || true)"
+    if [ -n "$app" ]; then
+      client_id="$(jq -r '.client_id // empty' <<<"$app")"
+      [ -n "$client_id" ] || die "existing Auth0 app '$app_name' has no client_id"
+      client_secret="$(auth0 apps show "$client_id" -r --json-compact --no-input \
+        | jq -r '.client_secret // empty')"
+      [ -n "$client_secret" ] || die "could not reveal client_secret for $client_id (auth0 apps show -r)"
+      info "m2m     $app_name — exists ($client_id)"
+    else
+      created="$(auth0 apps create \
+        --name "$app_name" \
+        --description "Konnect Dev Portal Dynamic Client Registration admin" \
+        --type m2m \
+        --reveal-secrets \
+        --no-input --json-compact)"
+      client_id="$(jq -r '.client_id // empty' <<<"$created")"
+      client_secret="$(jq -r '.client_secret // empty' <<<"$created")"
+      [ -n "$client_id" ] && [ -n "$client_secret" ] \
+        || die "auth0 apps create did not return client_id/secret: $created"
+      info "m2m     $app_name — created ($client_id)"
+    fi
+  fi
+
+  ensure_auth0_dcr_mgmt_grant "$client_id"
+
+  export AUTH0_DCR_CLIENT_ID="$client_id"
+  export AUTH0_DCR_CLIENT_SECRET="$client_secret"
+  export AUTH0_DCR_ISSUER="$issuer"
+  export AUTH0_DCR_AUDIENCE="$audience"
+  if [ -z "${AUTH0_DCR_INITIAL_CLIENT_AUDIENCE:-}" ] && [ "${AUTH0_DCR_SET_INITIAL_AUDIENCE:-0}" = "1" ]; then
+    export AUTH0_DCR_INITIAL_CLIENT_AUDIENCE
+    AUTH0_DCR_INITIAL_CLIENT_AUDIENCE="$(auth0_mgmt_audience)"
+  fi
+
+  info ""
+  info "DCR admin = $client_id (same secret as DEMO_APP_AUTH0_M2M when reused)"
+  info "  AUTH0_DCR_ISSUER=$issuer"
+  info "  AUTH0_DCR_AUDIENCE=$audience"
+  if [ "${AUTH0_DCR_WRITE_ENV:-0}" = "1" ] && [ -f "$ENV_FILE" ]; then
+    # Only write issuer/audience aliases — client id/secret already live in DEMO_APP_* when reused.
+    if ! grep -q '^AUTH0_DCR_ISSUER=' "$ENV_FILE" 2>/dev/null; then
+      {
+        echo ""
+        echo "# Auth0 DCR (bootstrap.sh auth0-dcr $(date -u +%Y-%m-%dT%H:%MZ))"
+        echo "AUTH0_DCR_ISSUER=$issuer"
+        echo "AUTH0_DCR_AUDIENCE=$audience"
+      } >>"$ENV_FILE"
+      info "wrote   AUTH0_DCR_ISSUER/AUDIENCE to $ENV_FILE"
+    fi
+  fi
+}
+
+# --- Dev Portal Auth0 DCR (Konnect application auth strategy) --------------
+# Creates the DCR provider + openid_connect strategy used by Dev Portal /
+# Gateway OIDC. Optionally provisions the Auth0 M2M first (auth0-dcr).
+#
+# Docs: https://developer.konghq.com/how-to/auth0-dcr/
+# UI:   https://cloud.konghq.com/us/portals/application-auth/auth-strategy/create
+
+konnect_curl() {
+  local method="$1" path="$2"
+  shift 2
+  local url="${KONNECT_API_BASE}${path}"
+  local code body tmp
+  tmp="$(mktemp)"
+  code="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "$url" \
+    -H "Authorization: Bearer $PAT" \
+    -H "Accept: application/json" \
+    -H "Content-Type: application/json" \
+    "$@")"
+  body="$(cat "$tmp")"
+  rm -f "$tmp"
+  if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+    printf '%s\n' "$body" >&2
+    die "Konnect $method $path → HTTP $code"
+  fi
+  printf '%s' "$body"
+}
+
+konnect_get_soft() {
+  local path="$1"
+  local url="${KONNECT_API_BASE}${path}"
+  local code body tmp
+  tmp="$(mktemp)"
+  code="$(curl -sS -o "$tmp" -w '%{http_code}' -X GET "$url" \
+    -H "Authorization: Bearer $PAT" \
+    -H "Accept: application/json")" || true
+  body="$(cat "$tmp")"
+  rm -f "$tmp"
+  if [ "$code" = "200" ]; then
+    printf '%s' "$body"
+    return 0
+  fi
+  return 1
+}
+
+find_dcr_provider_by_name() {
+  local name="$1" body
+  body="$(konnect_get_soft /v2/dcr-providers)" || return 1
+  printf '%s' "$body" | jq -c --arg n "$name" '
+    (.data // .items // .)
+    | if type == "array" then . else [] end
+    | map(select(.name == $n))
+    | .[0] // empty
+  '
+}
+
+find_auth_strategy_by_name() {
+  local name="$1" body
+  body="$(konnect_get_soft /v2/application-auth-strategies)" || return 1
+  printf '%s' "$body" | jq -c --arg n "$name" '
+    (.data // .items // .)
+    | if type == "array" then . else [] end
+    | map(select(.name == $n))
+    | .[0] // empty
+  '
+}
+
+cmd_portal_dcr() {
+  command -v curl >/dev/null 2>&1 || die "curl not found"
+
+  KONNECT_API_BASE="${KONNECT_API_BASE:-$BASE}"
+  KONNECT_API_BASE="${KONNECT_API_BASE%/}"
+
+  local issuer client_id client_secret audience
+  local provider_name strategy_name strategy_display
+  local initial_audience use_dev_scopes
+
+  # Prefer explicit AUTH0_DCR_*; else Demo/signer M2M; else provision via auth0-dcr.
+  client_id="$(trim "${AUTH0_DCR_CLIENT_ID:-${DEMO_APP_AUTH0_M2M_CLIENT_ID:-${AUTH0_SIGNER_M2M_CLIENT_ID:-}}}")"
+  client_secret="$(trim "${AUTH0_DCR_CLIENT_SECRET:-${DEMO_APP_AUTH0_M2M_CLIENT_SECRET:-${AUTH0_SIGNER_M2M_CLIENT_SECRET:-}}}")"
+  if [ -z "$client_id" ] || [ -z "$client_secret" ] || [ "${AUTH0_DCR_PROVISION_AUTH0:-0}" = "1" ]; then
+    if command -v auth0 >/dev/null 2>&1; then
+      cmd_auth0_dcr
+      client_id="$(trim "${AUTH0_DCR_CLIENT_ID:-}")"
+      client_secret="$(trim "${AUTH0_DCR_CLIENT_SECRET:-}")"
+    elif [ -z "$client_id" ] || [ -z "$client_secret" ]; then
+      die "AUTH0_DCR_CLIENT_ID/SECRET unset — set DEMO_APP_AUTH0_M2M_* or run ./bootstrap.sh auth0-dcr"
+    fi
+  fi
+  # Ensure Management API grant even when reusing Demo M2M without re-running auth0-dcr create.
+  if command -v auth0 >/dev/null 2>&1 && [ -n "$client_id" ]; then
+    ensure_auth0_dcr_mgmt_grant "$client_id" || true
+  fi
+
+  issuer="$(trim "${AUTH0_DCR_ISSUER:-${AUTH0_ISSUER:-}}")"
+  issuer="${issuer%/}"
+  issuer="${issuer%/authorize}"
+
+  audience="$(trim "${AUTH0_DCR_AUDIENCE:-${AUTH0_AUDIENCE:-livepeer-clearinghouse}}")"
+  provider_name="$(trim "${AUTH0_DCR_PROVIDER_NAME:-Auth0 Production}")"
+  strategy_name="$(trim "${AUTH0_DCR_STRATEGY_NAME:-Auth0 DCR Auth Strategy}")"
+  strategy_display="$(trim "${AUTH0_DCR_STRATEGY_DISPLAY_NAME:-$strategy_name}")"
+  initial_audience="$(trim "${AUTH0_DCR_INITIAL_CLIENT_AUDIENCE:-}")"
+  use_dev_scopes="${AUTH0_DCR_USE_DEVELOPER_MANAGED_SCOPES:-0}"
+
+  [ -n "$issuer" ] || die "AUTH0_DCR_ISSUER (or AUTH0_ISSUER) is required — e.g. https://YOUR_TENANT.us.auth0.com"
+  [ -n "$client_id" ] || die "AUTH0_DCR_CLIENT_ID is required (Auth0 M2M 'Konnect Portal DCR Admin')"
+  [ -n "$client_secret" ] || die "AUTH0_DCR_CLIENT_SECRET is required"
+  [ -n "$audience" ] || die "AUTH0_DCR_AUDIENCE is required (API identifier, e.g. livepeer-clearinghouse)"
+
+  info "== portal-dcr ($KONNECT_API_BASE) =="
+  info "issuer   $issuer"
+  info "audience $audience  (token audience for portal apps / Gateway OIDC)"
+  info "provider $provider_name  (provider_type=auth0 — immutable after create)"
+
+  local existing_provider provider_id dcr_config body managed_json
+  if [ "$use_dev_scopes" = "1" ]; then managed_json=true; else managed_json=false; fi
+  existing_provider="$(find_dcr_provider_by_name "$provider_name" || true)"
+  if [ -n "$existing_provider" ]; then
+    provider_id="$(jq -r '.id // empty' <<<"$existing_provider")"
+    info "dcr     $provider_name — exists ($provider_id)"
+  else
+    dcr_config="$(jq -n \
+      --arg id "$client_id" \
+      --arg secret "$client_secret" \
+      --arg aud "$initial_audience" \
+      --argjson managed "$managed_json" \
+      '{
+         initial_client_id: $id,
+         initial_client_secret: $secret
+       }
+       + (if $aud != "" then {initial_client_audience: $aud} else {} end)
+       + (if $managed then {use_developer_managed_scopes: true} else {} end)')"
+    body="$(jq -n \
+      --arg name "$provider_name" \
+      --arg issuer "$issuer" \
+      --argjson cfg "$dcr_config" \
+      '{
+         name: $name,
+         provider_type: "auth0",
+         issuer: $issuer,
+         dcr_config: $cfg
+       }')"
+    existing_provider="$(printf '%s' "$body" | konnect_curl POST /v2/dcr-providers -d @-)"
+    provider_id="$(jq -r '.id // empty' <<<"$existing_provider")"
+    [ -n "$provider_id" ] || die "DCR provider create returned no id: $existing_provider"
+    info "dcr     $provider_name — created ($provider_id)"
+  fi
+
+  local existing_strategy strategy_id scopes_json
+  existing_strategy="$(find_auth_strategy_by_name "$strategy_name" || true)"
+  if [ -n "$existing_strategy" ]; then
+    strategy_id="$(jq -r '.id // empty' <<<"$existing_strategy")"
+    info "auth    $strategy_name — exists ($strategy_id)"
+  else
+    scopes_json="$(printf '%s' "${AUTH0_DCR_SCOPES:-openid}" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length>0))')"
+    body="$(jq -n \
+      --arg name "$strategy_name" \
+      --arg display "$strategy_display" \
+      --arg issuer "$issuer" \
+      --arg aud "$audience" \
+      --arg provider "$provider_id" \
+      --argjson scopes "$scopes_json" \
+      '{
+         name: $name,
+         display_name: $display,
+         strategy_type: "openid_connect",
+         dcr_provider_id: $provider,
+         configs: {
+           "openid-connect": {
+             issuer: $issuer,
+             credential_claim: ["azp"],
+             scopes: $scopes,
+             auth_methods: ["client_credentials", "bearer"],
+             token_post_args_names: ["audience"],
+             token_post_args_values: [$aud]
+           }
+         }
+       }')"
+    existing_strategy="$(printf '%s' "$body" | konnect_curl POST /v2/application-auth-strategies -d @-)"
+    strategy_id="$(jq -r '.id // empty' <<<"$existing_strategy")"
+    [ -n "$strategy_id" ] || die "auth strategy create returned no id: $existing_strategy"
+    info "auth    $strategy_name — created ($strategy_id)"
+  fi
+
+  info ""
+  info "Next: ./bootstrap.sh portal-publish   # portal + API + publish with this strategy"
+  info "  AUTH_STRATEGY_ID=$strategy_id  DCR_PROVIDER_ID=$provider_id"
+  export AUTH_STRATEGY_ID="$strategy_id"
+  export DCR_PROVIDER_ID="$provider_id"
+}
+
+# --- Dev Portal publish (API + auth strategy) ------------------------------
+# Creates portal + page + catalog API (OpenAPI) and publishes with the Auth0
+# DCR application auth strategy. Idempotent by portal/API name.
+# Docs: https://developer.konghq.com/how-to/automate-api-catalog/
+
+find_portal_by_name() {
+  local name="$1" body
+  body="$(konnect_get_soft /v3/portals)" || body="$(konnect_get_soft /v2/portals)" || return 1
+  printf '%s' "$body" | jq -c --arg n "$name" '
+    (.data // .items // .)
+    | if type == "array" then . else [] end
+    | map(select(.name == $n))
+    | .[0] // empty
+  '
+}
+
+find_api_by_name() {
+  local name="$1" body
+  body="$(konnect_get_soft /v3/apis)" || return 1
+  printf '%s' "$body" | jq -c --arg n "$name" '
+    (.data // .items // .)
+    | if type == "array" then . else [] end
+    | map(select(.name == $n))
+    | .[0] // empty
+  '
+}
+
+ensure_portal_home_page() {
+  local portal_id="$1" pages body
+  pages="$(konnect_get_soft "/v3/portals/${portal_id}/pages")" || true
+  if printf '%s' "$pages" | jq -e '
+    (.data // .items // .)
+    | if type == "array" then . else [] end
+    | map(select(.slug == "/" or .slug == "/apis"))
+    | length > 0
+  ' >/dev/null 2>&1; then
+    info "page    / — exists"
+    return 0
+  fi
+  body="$(jq -n '{
+    title: "Clearinghouse APIs",
+    slug: "/",
+    visibility: "public",
+    status: "published",
+    content: "# Livepeer Clearinghouse\n\nSelf-serve usage for your app.\n\n::apis-list\n---\npersist-page-number: true\ncta-text: \"View APIs\"\n---\n"
+  }')"
+  printf '%s' "$body" | konnect_curl POST "/v3/portals/${portal_id}/pages" -d @- >/dev/null
+  info "page    / — created"
+}
+
+ensure_api_openapi_version() {
+  local api_id="$1"
+  local openapi_path="$2"
+  local version="${3:-1.0.0}"
+  local versions content body existing_id
+  [ -f "$openapi_path" ] || die "OpenAPI not found: $openapi_path"
+
+  content="$(jq -c --arg v "$version" '.info.version = $v' "$openapi_path")"
+  body="$(jq -n --arg v "$version" --arg content "$content" \
+    '{version: $v, spec: {content: $content}}')"
+
+  versions="$(konnect_get_soft "/v3/apis/${api_id}/versions")" || true
+  existing_id="$(printf '%s' "$versions" | jq -r --arg v "$version" '
+    (.data // .items // .)
+    | if type == "array" then . else [] end
+    | map(select(.version == $v))
+    | .[0].id // empty
+  ')"
+
+  if [ -n "$existing_id" ]; then
+    # Konnect allows PATCH (not PUT) to refresh spec content in place.
+    printf '%s' "$(jq -n --arg content "$content" '{spec: {content: $content}}')" \
+      | konnect_curl PATCH "/v3/apis/${api_id}/versions/${existing_id}" -d @- >/dev/null
+    info "spec    $version — updated from $(basename "$openapi_path")"
+    return 0
+  fi
+
+  printf '%s' "$body" | konnect_curl POST "/v3/apis/${api_id}/versions" -d @- >/dev/null
+  info "spec    $version — uploaded from $(basename "$openapi_path")"
+}
+
+cmd_portal_publish() {
+  command -v curl >/dev/null 2>&1 || die "curl not found"
+
+  KONNECT_API_BASE="${KONNECT_API_BASE:-$BASE}"
+  KONNECT_API_BASE="${KONNECT_API_BASE%/}"
+
+  local portal_name api_name strategy_name strategy_id
+  local portal_id api_id openapi_path visibility auto_approve body
+  local existing_portal existing_api existing_strategy
+
+  portal_name="$(trim "${KONNECT_PORTAL_NAME:-clearinghouse}")"
+  api_name="$(trim "${KONNECT_API_NAME:-clearinghouse-usage}")"
+  strategy_name="$(trim "${AUTH0_DCR_STRATEGY_NAME:-Auth0 DCR Auth Strategy}")"
+  strategy_id="$(trim "${AUTH_STRATEGY_ID:-${KONNECT_AUTH_STRATEGY_ID:-}}")"
+  visibility="$(trim "${KONNECT_API_VISIBILITY:-public}")"
+  auto_approve="${KONNECT_AUTO_APPROVE_REGISTRATIONS:-true}"
+  openapi_path="${KONNECT_OPENAPI_PATH:-$SCRIPT_DIR/../builder-api/cmd/builder-api/openapi.json}"
+
+  info "== portal-publish ($KONNECT_API_BASE) =="
+
+  if [ -z "$strategy_id" ]; then
+    existing_strategy="$(find_auth_strategy_by_name "$strategy_name" || true)"
+    strategy_id="$(jq -r '.id // empty' <<<"${existing_strategy:-}")"
+  fi
+  if [ -z "$strategy_id" ]; then
+    info "auth strategy missing — running portal-dcr first"
+    cmd_portal_dcr
+    strategy_id="$(trim "${AUTH_STRATEGY_ID:-}")"
+    if [ -z "$strategy_id" ]; then
+      existing_strategy="$(find_auth_strategy_by_name "$strategy_name" || true)"
+      strategy_id="$(jq -r '.id // empty' <<<"${existing_strategy:-}")"
+    fi
+  fi
+  [ -n "$strategy_id" ] || die "no auth strategy id — run ./bootstrap.sh portal-dcr first"
+  info "auth    $strategy_name ($strategy_id)"
+
+  # Prefer explicit IDs; else find/create by name.
+  portal_id="$(trim "${KONNECT_PORTAL_ID:-}")"
+  if [ -z "$portal_id" ]; then
+    existing_portal="$(find_portal_by_name "$portal_name" || true)"
+    portal_id="$(jq -r '.id // empty' <<<"${existing_portal:-}")"
+  fi
+  if [ -z "$portal_id" ]; then
+    body="$(jq -n --arg name "$portal_name" --arg sid "$strategy_id" '{
+      name: $name,
+      display_name: "Livepeer Clearinghouse",
+      description: "JWT-scoped usage API for clearinghouse integrators",
+      authentication_enabled: true,
+      auto_approve_applications: true,
+      auto_approve_developers: true,
+      default_api_visibility: "public",
+      default_page_visibility: "public",
+      default_application_auth_strategy_id: $sid
+    }')"
+    existing_portal="$(printf '%s' "$body" | konnect_curl POST /v3/portals -d @-)"
+    portal_id="$(jq -r '.id // empty' <<<"$existing_portal")"
+    [ -n "$portal_id" ] || die "portal create returned no id: $existing_portal"
+    info "portal  $portal_name — created ($portal_id)"
+  else
+    info "portal  $portal_name — exists ($portal_id)"
+  fi
+
+  ensure_portal_home_page "$portal_id"
+
+  api_id="$(trim "${KONNECT_API_ID:-}")"
+  if [ -z "$api_id" ]; then
+    existing_api="$(find_api_by_name "$api_name" || true)"
+    api_id="$(jq -r '.id // empty' <<<"${existing_api:-}")"
+  fi
+  if [ -z "$api_id" ]; then
+    body="$(jq -n --arg name "$api_name" '{
+      name: $name,
+      description: "GET /api/v1/apps/{clientId}/usage — actor-scoped OpenMeter reads"
+    }')"
+    existing_api="$(printf '%s' "$body" | konnect_curl POST /v3/apis -d @-)"
+    api_id="$(jq -r '.id // empty' <<<"$existing_api")"
+    [ -n "$api_id" ] || die "API create returned no id: $existing_api"
+    info "api     $api_name — created ($api_id)"
+  else
+    info "api     $api_name — exists ($api_id)"
+  fi
+
+  ensure_api_openapi_version "$api_id" "$openapi_path" "${KONNECT_API_VERSION:-1.0.0}"
+
+  # Optional: link Gateway Service implementation when IDs are provided.
+  if [ -n "${KONNECT_CONTROL_PLANE_ID:-}" ] && [ -n "${KONNECT_SERVICE_ID:-}" ]; then
+    local impls
+    impls="$(konnect_get_soft "/v3/apis/${api_id}/implementations")" || true
+    if printf '%s' "$impls" | jq -e --arg s "$KONNECT_SERVICE_ID" '
+      (.data // .items // .)
+      | if type == "array" then . else [] end
+      | map(select(.service.id == $s))
+      | length > 0
+    ' >/dev/null 2>&1; then
+      info "impl    service $KONNECT_SERVICE_ID — linked"
+    else
+      body="$(jq -n --arg cp "$KONNECT_CONTROL_PLANE_ID" --arg sid "$KONNECT_SERVICE_ID" \
+        '{service: {control_plane_id: $cp, id: $sid}}')"
+      printf '%s' "$body" | konnect_curl POST "/v3/apis/${api_id}/implementations" -d @- >/dev/null
+      info "impl    service $KONNECT_SERVICE_ID — linked"
+    fi
+  else
+    info "impl    skipped (set KONNECT_CONTROL_PLANE_ID + KONNECT_SERVICE_ID to link Gateway)"
+  fi
+
+  body="$(jq -n \
+    --arg sid "$strategy_id" \
+    --arg vis "$visibility" \
+    --argjson auto "$( [ "$auto_approve" = "true" ] || [ "$auto_approve" = "1" ] && echo true || echo false )" \
+    '{
+      visibility: $vis,
+      auto_approve_registrations: $auto,
+      auth_strategy_ids: [$sid]
+    }')"
+  printf '%s' "$body" | konnect_curl PUT \
+    "/v3/apis/${api_id}/publications/${portal_id}" -d @- >/dev/null
+  info "publish — ok (auth_strategy_ids=[$strategy_id])"
+
+  export KONNECT_PORTAL_ID="$portal_id"
+  export KONNECT_API_ID="$api_id"
+  export AUTH_STRATEGY_ID="$strategy_id"
+
+  info ""
+  info "Portal ID:   $portal_id"
+  info "API ID:      $api_id"
+  info "Strategy ID: $strategy_id"
+  info "Open: https://cloud.konghq.com/us/portals/$portal_id"
+}
+
 # --- arg parsing -----------------------------------------------------------
 SUBSCRIBE=0
 ARGS=()
@@ -478,12 +1082,21 @@ case "$cmd" in
   owner)
     ensure_owner_customer "${1:-}" "${2:-}" "$SUBSCRIBE"
     ;;
+  auth0-dcr)
+    cmd_auth0_dcr
+    ;;
+  portal-dcr)
+    cmd_portal_dcr
+    ;;
+  portal-publish)
+    cmd_portal_publish
+    ;;
   all)
     cmd_catalog
     ensure_customer "${1:-}" "${2:-}" "${3:-}" "$SUBSCRIBE"
     ;;
   *)
-    die "unknown command '$cmd' (expected: catalog | customer | owner | all)"
+    die "unknown command '$cmd' (expected: catalog | customer | owner | auth0-dcr | portal-dcr | portal-publish | all)"
     ;;
 esac
 info "done."

@@ -140,6 +140,6 @@ Builder-api resolves the key to the Konnect meter ULID before querying.
 ## Implementation tasks
 
 - [ ] Keep this guide aligned with `/api/v1/openapi.json` when routes change.
-- [ ] Replace `${KONNECT_PROXY_URL}` in OpenAPI servers once the gateway hostname
-      is stable.
+- [x] OpenAPI `servers` default to Railway; swap primary to `$KONNECT_PROXY_URL`
+      once the gateway hostname is stable.
 - [ ] Link sample SDK snippets once a client consumes this route.

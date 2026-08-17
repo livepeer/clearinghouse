@@ -49,13 +49,72 @@ data plane.
 | Auth0 user JWT / DCR Bearer | Yes | Yes |
 | `sk_*` | **No** (do not add Key Auth in v1) | Yes |
 
-Playground / OpenAPI `servers` for the published API should point at
-`$KONNECT_PROXY_URL`. Document Railway for `sk_*` or after exchanging for a JWT
-via existing token flows.
+Until a Gateway Service is linked, OpenAPI `servers` / playground default to
+Railway builder-api (`https://builder-api-production-82bf.up.railway.app`).
+After Phase C, put `$KONNECT_PROXY_URL` first for JWT / DCR Bearer; keep Railway
+documented for `sk_*`.
+
+Playground calls from `*.kongportals.com` need CORS on builder-api
+(`CORS_ALLOW_KONG_PORTALS=true` by default; optional `CORS_ALLOWED_ORIGINS`).
 
 ---
 
 ## Phase B — Portal + Auth0 strategy
+
+### Form mapping ([create auth strategy](https://cloud.konghq.com/us/portals/application-auth/auth-strategy/create))
+
+The UI “New DCR Provider” panel is the Auth0 DCR provider **plus** the
+application auth strategy. Map fields as follows:
+
+| UI field | Value |
+| --- | --- |
+| Name | `Auth0 Production` (or `AUTH0_DCR_PROVIDER_NAME`) |
+| Provider Type | **Auth0** — immutable after create |
+| Issuer URL | Auth0 tenant root, e.g. `https://pymthouse.us.auth0.com` |
+| Client ID / Client Secret | Auth0 M2M **“Konnect Portal DCR Admin”** (Management API), **not** the clearinghouse signer M2M and **not** what callers use for usage |
+| Client Audience | Usually empty; set only for Auth0 custom domains (`…/api/v2/`) |
+| Use Developer Managed Scopes | off (unless you need portal-managed scopes) |
+| Scopes | `openid` (plus any extras developers need) |
+| Credential Claims | `azp` |
+| Auth Methods | `client_credentials`, `bearer` |
+| SSL verify | on |
+
+Audience for tokens issued to portal apps is configured on the **strategy** as
+`livepeer-clearinghouse` (`token_post_args` / `AUTH0_DCR_AUDIENCE`), not as the
+DCR admin Client Audience.
+
+### JWT-scoped usage (what this enables)
+
+Yes — with the strategy linked to a Gateway Service, Konnect validates Auth0
+Bearer / client_credentials at the edge, then builder-api scopes rows to the
+authenticated **actor** + path `clientId`.
+
+| Token | Who | Usage result |
+| --- | --- | --- |
+| End-user Auth0 JWT (`bearer`) | Real user / app user | Actor-scoped rows (intended self-serve path) |
+| Portal DCR app `client_credentials` | App-level `azp` | Passes Gateway if OIDC accepts it; builder-api still needs a user JWT or `sk_*` identity for actor isolation |
+| DCR Admin M2M | Konnect → Auth0 Management only | **Never** call usage with this |
+
+### Bootstrap (Auth0 then Konnect)
+
+Demo default: **one M2M** (`DEMO_APP_AUTH0_M2M_*`) is both signer mint and Konnect
+DCR admin (two Auth0 client grants: `livepeer-clearinghouse` + Management API).
+Production can set `AUTH0_DCR_DEDICATED=1` for a separate least-privilege app.
+
+```bash
+# 1) Ensure Demo M2M has Management API DCR scopes
+./openmeter-collector/provision/bootstrap.sh auth0-dcr
+
+# 2) Konnect DCR provider + strategy
+./openmeter-collector/provision/bootstrap.sh portal-dcr
+
+# 3) Portal + usage API + publish with auth_strategy_ids
+./openmeter-collector/provision/bootstrap.sh portal-publish
+```
+
+`portal-publish` creates/finds portal `clearinghouse` and API `clearinghouse-usage`,
+uploads builder-api OpenAPI, and `PUT`s the publication with the Auth0 DCR strategy.
+Optional: `KONNECT_CONTROL_PLANE_ID` + `KONNECT_SERVICE_ID` to link a Gateway Service.
 
 ### 1. Portal and API
 
@@ -69,27 +128,15 @@ Create an Auth0 Machine-to-Machine application (“Konnect Portal DCR Admin”)
 with Management API scopes from the
 [Auth0 DCR how-to](https://developer.konghq.com/how-to/auth0-dcr/).
 
-### 3. DCR provider (`provider_type: auth0`)
+### 3–5. Provider, strategy, publish
 
-Create the DCR provider with:
+Prefer `bootstrap.sh portal-dcr` (above). Equivalent API steps:
 
-- `provider_type`: **`auth0`** — **immutable after create**; choose Auth0 once
-- Issuer URL for the Auth0 tenant
-- `initial_client_id` / `initial_client_secret` from the M2M app above
-
-### 4. Application auth strategy
-
-Configure an `openid_connect` application auth strategy:
-
-- `credential_claim`: `["azp"]`
-- `auth_methods`: `["client_credentials", "bearer"]`
-- Audience: **`livepeer-clearinghouse`**
-
-### 5. Publish
-
-`PUT …/publications/{portalId}` including `auth_strategy_ids` for the Auth0
-strategy. Developers register apps in the portal; Konnect DCR creates Auth0
-clients when applicable.
+1. DCR provider: `provider_type: auth0`, issuer, `initial_client_id` / `initial_client_secret`
+2. Application auth strategy: `openid_connect`, `credential_claim: ["azp"]`,
+   `auth_methods: ["client_credentials","bearer"]`, audience `livepeer-clearinghouse`
+3. `PUT …/publications/{portalId}` with `auth_strategy_ids` (or set
+   `KONNECT_PORTAL_ID` + `KONNECT_API_ID` so bootstrap publishes)
 
 ---
 
@@ -101,7 +148,8 @@ clients when applicable.
    - Optional: `/health` only
    - **Do not** expose `/authorize`, `POST …/oidc/token`, or signer bus routes
 3. Link the published API / apply the Auth0 OIDC plugin from the portal strategy.
-4. Set OpenAPI `servers` + playground base URL to `$KONNECT_PROXY_URL`.
+4. Move OpenAPI `servers` / playground to `$KONNECT_PROXY_URL` (Railway stays
+   as a secondary server for `sk_*`).
 5. Optional checked-in declarative config:
    [`provision/gateway/kong.yaml`](../../provision/gateway/kong.yaml) via
    [decK](https://developer.konghq.com/deck/get-started/).
@@ -144,8 +192,11 @@ enforces actor/`clientId` even after a valid edge token.
 
 ## Implementation tasks
 
-- [ ] Create Auth0 M2M + DCR provider (`provider_type: auth0`) in the target org.
-- [ ] Publish usage OpenAPI with `auth_strategy_ids` and gateway link.
-- [ ] Apply TLS verify depth on self-managed data planes.
-- [ ] Replace OpenAPI `${KONNECT_PROXY_URL}` with the live proxy hostname.
-- [ ] Sync `provision/gateway/kong.yaml` via decK after first successful apply.
+- [x] Script DCR provider + auth strategy via `bootstrap.sh portal-dcr`
+- [x] Portal publish with auth strategy via `bootstrap.sh portal-publish`
+- [ ] Create Auth0 M2M + run `portal-dcr` in the target org
+- [ ] Publish usage OpenAPI with `auth_strategy_ids` and gateway link
+- [ ] Apply TLS verify depth on self-managed data planes
+- [x] OpenAPI `servers` default to Railway builder-api (pre-gateway)
+- [ ] After Gateway link: put live `$KONNECT_PROXY_URL` first in OpenAPI servers
+- [ ] Sync `provision/gateway/kong.yaml` via decK after first successful apply

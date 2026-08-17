@@ -69,7 +69,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/apps/{clientId}/users", s.handleCreateUser)
 	mux.HandleFunc("POST /api/v1/apps/{clientId}/oidc/token", s.handleOIDCToken)
 	mux.HandleFunc("GET /api/v1/apps/{clientId}/usage", s.handleUsage)
-	return mux
+	return withCORS(mux, s.cfg.CORSAllowedOrigins, s.cfg.CORSAllowKongPortals)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

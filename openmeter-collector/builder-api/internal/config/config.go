@@ -34,6 +34,10 @@ type Config struct {
 	// -remoteSignerWebhookUrl (REMOTE_SIGNER_WEBHOOK_URL). JWT subject tokens require both.
 	IdentityWebhookURL string
 	WebhookSecret      string
+	// CORSAllowedOrigins is a comma-separated allowlist (exact Origin match, or "*").
+	CORSAllowedOrigins []string
+	// CORSAllowKongPortals allows https://*.kongportals.com (Dev Portal playground).
+	CORSAllowKongPortals bool
 }
 
 // Load reads configuration from environment variables.
@@ -61,8 +65,10 @@ func Load() (Config, error) {
 		APIKeyPrefix:       envOr("API_KEY_PREFIX", "sk_"),
 		DemoAPIKeys:        strings.TrimSpace(os.Getenv("DEMO_API_KEYS")),
 		TenantAdminKeys:    strings.TrimSpace(os.Getenv("TENANT_ADMIN_KEYS")),
-		IdentityWebhookURL: strings.TrimSpace(os.Getenv("REMOTE_SIGNER_WEBHOOK_URL")),
-		WebhookSecret:      strings.TrimSpace(os.Getenv("WEBHOOK_SECRET")),
+		IdentityWebhookURL:   strings.TrimSpace(os.Getenv("REMOTE_SIGNER_WEBHOOK_URL")),
+		WebhookSecret:        strings.TrimSpace(os.Getenv("WEBHOOK_SECRET")),
+		CORSAllowedOrigins:   splitCSV(os.Getenv("CORS_ALLOWED_ORIGINS")),
+		CORSAllowKongPortals: envBool("CORS_ALLOW_KONG_PORTALS", true),
 	}
 
 	if v := strings.TrimSpace(os.Getenv("OPENMETER_TRIAL_GRANT_USD_MICROS")); v != "" {
@@ -140,4 +146,16 @@ func envBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func splitCSV(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
