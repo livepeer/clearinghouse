@@ -72,6 +72,8 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    ports:
+      - "127.0.0.1:8095:8095"
     volumes:
       - ./.env:/service/.env:ro
 

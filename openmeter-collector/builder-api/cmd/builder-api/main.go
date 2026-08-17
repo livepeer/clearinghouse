@@ -45,7 +45,7 @@ func main() {
 	if cfg.IdentityWebhookURL != "" && cfg.WebhookSecret != "" {
 		verifier = webhookverify.New(cfg.IdentityWebhookURL, cfg.WebhookSecret)
 	} else {
-		log.Printf("identity-webhook not configured; JWT subject tokens will be rejected (set IDENTITY_WEBHOOK_URL + WEBHOOK_SECRET)")
+		log.Printf("identity-webhook not configured; JWT subject tokens will be rejected (set REMOTE_SIGNER_WEBHOOK_URL + WEBHOOK_SECRET)")
 	}
 
 	demoKeys, err := apikey.LoadDemoStore(cfg.DemoAPIKeys)

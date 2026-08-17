@@ -97,10 +97,10 @@ JWT `subject_token`s are **not** verified in-process. The Builder API forwards t
 verification and claim extraction. `sk_*` API-key subject tokens are still resolved directly
 against Auth0 `app_metadata` by the Builder API.
 
-Set both to enable JWT exchange (defaults `IDENTITY_WEBHOOK_URL` to `REMOTE_SIGNER_WEBHOOK_URL`):
+Set both to enable JWT exchange (same vars as the remote signer):
 
 ```bash
-IDENTITY_WEBHOOK_URL=http://identity-webhook:8090
+REMOTE_SIGNER_WEBHOOK_URL=http://identity-webhook:8090/authorize
 WEBHOOK_SECRET=...   # shared with the identity-webhook
 ```
 
