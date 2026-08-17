@@ -265,18 +265,40 @@ func TestBoundaryEndToEndWithRealClient(t *testing.T) {
 
 	konnect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/meters":
+			// Konnect resolves meter key → ULID before POST /meters/{id}/query.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{{"id": "01METERTEST000000000000001", "key": "billable_usd_micros"}},
+			})
 		case strings.HasPrefix(r.URL.Path, "/customers"):
 			if r.URL.Query().Get("page") != "1" {
 				_, _ = w.Write([]byte(`{"data":[]}`))
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": customers})
-		case strings.Contains(r.URL.Path, "/query"):
-			subjects := r.URL.Query()["subject"]
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/query"):
+			var body struct {
+				Filters struct {
+					Dimensions map[string]struct {
+						In []string `json:"in"`
+					} `json:"dimensions"`
+				} `json:"filters"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode query body: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			subjects := body.Filters.Dimensions["subject"].In
 			meterQueries = append(meterQueries, subjects)
 			rows := []map[string]any{}
 			for _, s := range subjects {
-				rows = append(rows, map[string]any{"subject": s, "value": 1})
+				rows = append(rows, map[string]any{
+					"value":      "1",
+					"from":       "2026-01-01T00:00:00Z",
+					"to":         "2026-01-02T00:00:00Z",
+					"dimensions": map[string]string{"subject": s},
+				})
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": rows})
 		default:
