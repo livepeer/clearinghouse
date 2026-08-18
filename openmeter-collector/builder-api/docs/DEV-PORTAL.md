@@ -7,6 +7,17 @@ validates Auth0 tokens at the edge.
 
 Audience API identifier: **`livepeer-clearinghouse`**.
 
+## Hosts (do not mix these up)
+
+| Host | What it is | Use for |
+| --- | --- | --- |
+| `https://livepeer.pymthouse.com` | Kong Dev Portal custom domain | Docs, DCR “create app”, playground UI origin (CORS) |
+| `https://builder-api-production-82bf.up.railway.app` | Railway **builder-api** | Usage, user upsert, RFC 8693 signer session |
+| `https://pymthouse.us.auth0.com` | Auth0 tenant | `POST /oauth/token` signer mint (`sign:mint_user_token`) |
+| `$KONNECT_PROXY_URL` | Kong Gateway (optional Phase C) | Edge OIDC for JWT / DCR Bearer only |
+
+`livepeer.pymthouse.com` is **not** an API. Minting or `POST /api/v1/oidc/token` against that host returns portal HTML / CloudFront 403.
+
 Companion docs: [USAGE.md](USAGE.md), [TENANT-ISOLATION.md](TENANT-ISOLATION.md).
 Upstream how-tos: [Auth0 DCR](https://developer.konghq.com/how-to/auth0-dcr/),
 [Dev Portal DCR auth methods](https://developer.konghq.com/dev-portal/dynamic-client-registration/#authentication-methods),
@@ -54,8 +65,28 @@ Railway builder-api (`https://builder-api-production-82bf.up.railway.app`).
 After Phase C, put `$KONNECT_PROXY_URL` first for JWT / DCR Bearer; keep Railway
 documented for `sk_*`.
 
-Playground calls from `*.kongportals.com` need CORS on builder-api
-(`CORS_ALLOW_KONG_PORTALS=true` by default; optional `CORS_ALLOWED_ORIGINS`).
+Playground browser origins that need CORS on builder-api:
+
+- `https://*.kongportals.com` (`CORS_ALLOW_KONG_PORTALS=true` by default)
+- `https://livepeer.pymthouse.com` (`CORS_ALLOWED_ORIGINS`)
+
+### Signer mint (Auth0) vs SignerSession (builder-api)
+
+```bash
+# 1) Short-lived signer JWT — Auth0 (not the portal host)
+curl -sS -X POST 'https://pymthouse.us.auth0.com/oauth/token' \
+  -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -H 'content-type: application/x-www-form-urlencoded' \
+  --data-urlencode 'grant_type=client_credentials' \
+  --data-urlencode 'audience=livepeer-clearinghouse' \
+  --data-urlencode 'scope=sign:mint_user_token' \
+  --data-urlencode "external_user_id=$EXTERNAL_USER_ID" \
+  --data-urlencode "client_id=$CLIENT_ID"
+
+# 2) Full SignerSession envelope — Railway builder-api
+export BUILDER_API=https://builder-api-production-82bf.up.railway.app
+# POST $BUILDER_API/api/v1/apps/$CLIENT_ID/oidc/token  (RFC 8693)
+```
 
 ---
 
@@ -74,7 +105,7 @@ application auth strategy. Map fields as follows:
 | Client ID / Client Secret | Auth0 M2M **“Konnect Portal DCR Admin”** (Management API), **not** the clearinghouse signer M2M and **not** what callers use for usage |
 | Client Audience | Usually empty; set only for Auth0 custom domains (`…/api/v2/`) |
 | Use Developer Managed Scopes | off (unless you need portal-managed scopes) |
-| Scopes | `openid` (plus any extras developers need) |
+| Scopes | `sign:mint_user_token,sign:job` (must exist on Auth0 API `livepeer-clearinghouse`; override via `AUTH0_DCR_SCOPES`) |
 | Credential Claims | `azp` |
 | Auth Methods | `client_credentials`, `bearer` |
 | SSL verify | on |
@@ -134,7 +165,8 @@ Prefer `bootstrap.sh portal-dcr` (above). Equivalent API steps:
 
 1. DCR provider: `provider_type: auth0`, issuer, `initial_client_id` / `initial_client_secret`
 2. Application auth strategy: `openid_connect`, `credential_claim: ["azp"]`,
-   `auth_methods: ["client_credentials","bearer"]`, audience `livepeer-clearinghouse`
+   `auth_methods: ["client_credentials","bearer"]`, audience `livepeer-clearinghouse`,
+   scopes `sign:mint_user_token` + `sign:job` (`AUTH0_DCR_SCOPES`)
 3. `PUT …/publications/{portalId}` with `auth_strategy_ids` (or set
    `KONNECT_PORTAL_ID` + `KONNECT_API_ID` so bootstrap publishes)
 

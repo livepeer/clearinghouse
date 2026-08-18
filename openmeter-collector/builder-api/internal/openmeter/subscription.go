@@ -11,7 +11,8 @@ import (
 )
 
 type subscriptionPage struct {
-	Data []subscription `json:"data"`
+	Items []subscription `json:"items"`
+	Data  []subscription `json:"data"`
 }
 
 type subscription struct {
@@ -110,8 +111,13 @@ func (c *Client) listSubscriptions(ctx context.Context, customerID string) ([]su
 	}
 
 	var page subscriptionPage
-	if err := json.Unmarshal(respBody, &page); err == nil && len(page.Data) > 0 {
-		return page.Data, nil
+	if err := json.Unmarshal(respBody, &page); err == nil {
+		if len(page.Items) > 0 {
+			return page.Items, nil
+		}
+		if len(page.Data) > 0 {
+			return page.Data, nil
+		}
 	}
 
 	var list []subscription

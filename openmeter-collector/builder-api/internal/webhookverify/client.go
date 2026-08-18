@@ -25,18 +25,31 @@ type Client struct {
 }
 
 // New creates a webhook verification client. baseURL is REMOTE_SIGNER_WEBHOOK_URL
-// (e.g. http://identity-webhook:8090/authorize); secret is the shared WEBHOOK_SECRET.
-// A trailing /authorize is stripped so the client always POSTs {base}/authorize.
+// (identity-webhook `…/authorize`, or go-livepeer-style `…/webhooks/remote-signer`);
+// secret is the shared WEBHOOK_SECRET.
 func New(baseURL, secret string) *Client {
-	base := strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
-	base = strings.TrimSuffix(base, "/authorize")
 	return &Client{
-		baseURL: strings.TrimSuffix(base, "/"),
+		baseURL: strings.TrimSpace(baseURL),
 		secret:  strings.TrimSpace(secret),
 		http: &http.Client{
 			Timeout: 15 * time.Second,
 		},
 	}
+}
+
+func authorizeEndpoint(baseURL string) string {
+	base := strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		return "/authorize"
+	}
+	if strings.HasSuffix(base, "/authorize") {
+		return base
+	}
+	// PymtHouse / go-livepeer: the configured webhook URL is the authorize endpoint.
+	if strings.Contains(base, "/webhooks/") {
+		return base
+	}
+	return base + "/authorize"
 }
 
 type authorizePayload struct {
@@ -64,7 +77,7 @@ func (c *Client) VerifyUserAccessToken(ctx context.Context, token, expectedClien
 		return "", "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/authorize", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authorizeEndpoint(c.baseURL), bytes.NewReader(body))
 	if err != nil {
 		return "", "", err
 	}

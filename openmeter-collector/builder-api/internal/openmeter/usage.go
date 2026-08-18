@@ -334,12 +334,25 @@ func (c *Client) ListCustomerKeysForClient(ctx context.Context, clientID string)
 
 func decodeCustomerList(body []byte) ([]Customer, error) {
 	var page customerPage
-	if err := json.Unmarshal(body, &page); err == nil && page.Data != nil {
-		return page.Data, nil
+	if err := json.Unmarshal(body, &page); err == nil {
+		if len(page.Items) > 0 {
+			return page.Items, nil
+		}
+		if page.Data != nil {
+			return page.Data, nil
+		}
+		// Empty page with known shape.
+		if bytesContainsJSONKey(body, "items") || bytesContainsJSONKey(body, "data") {
+			return nil, nil
+		}
 	}
 	var list []Customer
 	if err := json.Unmarshal(body, &list); err == nil {
 		return list, nil
 	}
 	return nil, fmt.Errorf("openmeter customers response has unexpected shape: %s", string(body))
+}
+
+func bytesContainsJSONKey(body []byte, key string) bool {
+	return strings.Contains(string(body), `"`+key+`"`)
 }

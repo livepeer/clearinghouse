@@ -807,13 +807,34 @@ cmd_portal_dcr() {
     info "dcr     $provider_name — created ($provider_id)"
   fi
 
-  local existing_strategy strategy_id scopes_json
+  local existing_strategy strategy_id scopes_json scopes_csv
+  scopes_csv="$(trim "${AUTH0_DCR_SCOPES:-sign:mint_user_token,sign:job}")"
+  scopes_json="$(printf '%s' "$scopes_csv" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length>0))')"
   existing_strategy="$(find_auth_strategy_by_name "$strategy_name" || true)"
   if [ -n "$existing_strategy" ]; then
     strategy_id="$(jq -r '.id // empty' <<<"$existing_strategy")"
-    info "auth    $strategy_name — exists ($strategy_id)"
+    [ -n "$strategy_id" ] || die "auth strategy exists but has no id"
+    # Sync scopes on existing strategies (create path is below). Konnect may reject
+    # a full replace of immutable fields — PATCH configs only.
+    body="$(jq -n \
+      --arg issuer "$issuer" \
+      --arg aud "$audience" \
+      --argjson scopes "$scopes_json" \
+      '{
+         configs: {
+           "openid-connect": {
+             issuer: $issuer,
+             credential_claim: ["azp"],
+             scopes: $scopes,
+             auth_methods: ["client_credentials", "bearer"],
+             token_post_args_names: ["audience"],
+             token_post_args_values: [$aud]
+           }
+         }
+       }')"
+    printf '%s' "$body" | konnect_curl PATCH "/v2/application-auth-strategies/${strategy_id}" -d @- >/dev/null
+    info "auth    $strategy_name — exists ($strategy_id); scopes=[$scopes_csv]"
   else
-    scopes_json="$(printf '%s' "${AUTH0_DCR_SCOPES:-openid}" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length>0))')"
     body="$(jq -n \
       --arg name "$strategy_name" \
       --arg display "$strategy_display" \
@@ -840,7 +861,7 @@ cmd_portal_dcr() {
     existing_strategy="$(printf '%s' "$body" | konnect_curl POST /v2/application-auth-strategies -d @-)"
     strategy_id="$(jq -r '.id // empty' <<<"$existing_strategy")"
     [ -n "$strategy_id" ] || die "auth strategy create returned no id: $existing_strategy"
-    info "auth    $strategy_name — created ($strategy_id)"
+    info "auth    $strategy_name — created ($strategy_id); scopes=[$scopes_csv]"
   fi
 
   info ""
