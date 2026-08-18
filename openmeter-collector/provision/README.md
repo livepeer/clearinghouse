@@ -34,6 +34,10 @@ file first (`source .env` does **not** export vars to child processes).
 | `OPENMETER_OWNER_STARTER_PLAN_KEY` | Plan key for `owner … --subscribe`. | `clearinghouse_owner_starter` (catalog) |
 | `OPENMETER_DEMO_STARTER_PLAN_KEY` | Plan key for M2M `customer … --subscribe`. | `clearinghouse_demo_starter` (catalog) |
 | `OPENMETER_DEFAULT_STARTER_INCLUDED_USD_MICROS` | Override rate-card `discounts.usage` when creating plans. | catalog value (`5000000`) |
+| `OPENMETER_STRIPE_API_KEY` / `STRIPE_SECRET_KEY` | Install Konnect Stripe app on `billing` when missing. Prefer a restricted key. | unset (warn + skip PAYG profile) |
+| `OPENMETER_FREE_BILLING_PROFILE_ID` | Pin Starter customers to this sandbox profile. | discovered / `clearinghouse-free` |
+| `OPENMETER_STRIPE_BILLING_PROFILE_ID` | PAYG profile (tax/invoicing/payment = Stripe app). | discovered / `clearinghouse-stripe` |
+| `OPENMETER_BILLING_OUT` | Where `billing` writes ids for `sdk-config.json`. | `./openmeter-billing.json` |
 
 If `OPENMETER_URL` is unset, the scripts derive it from `OPENMETER_INGEST_URL` (strip `/events`).
 
@@ -134,6 +138,15 @@ existing customers; they warn if an existing customer is missing the expected ke
 Identity mapping is enforced by the Bloblang in [`../collector.yaml`](../collector.yaml)
 and covered by Benthos unit tests in [`../collector_benthos_test.yaml`](../collector_benthos_test.yaml).
 
+## Billing profiles (Path A PAYG)
+
+`catalog` (and `billing`) ensure:
+
+1. **Sandbox / free** — reuse the org sandbox profile (or create `clearinghouse-free`) for Starter without a payment method.
+2. **Stripe PAYG** — when a ready Stripe app exists (or `OPENMETER_STRIPE_API_KEY` / `STRIPE_SECRET_KEY` can install one), create/reuse `clearinghouse-stripe` with `charge_automatically` + daily collection.
+
+Ids land in `openmeter-billing.json` and are merged into root `./bootstrap.sh` → `sdk-config.json` under `openmeter.*BillingProfileId` / `*AppId`. `customer` / `owner` pin new customers to the free profile when that id is known.
+
 ## Limitations
 
 - Customer lookup lists customers and exact-matches the key locally (the API `key`
@@ -142,8 +155,8 @@ and covered by Benthos unit tests in [`../collector_benthos_test.yaml`](../colle
   link (e.g. created with an older bootstrap), the script deletes and recreates it.
 - Subscriptions are best-effort with `--subscribe`; plan pricing / discount changes on
   an already-published plan require a new plan version in Konnect (out of scope).
-- No free/sandbox billing-profile attach (pymthouse uses `pymthouse-free`); Konnect orgs
-  that require a Stripe profile may need that configured once in the UI.
+- Stripe app install needs a Stripe secret/restricted key in env, or a one-time install
+  in Konnect → Metering & Billing → Settings → Stripe.
 - No prepaid credit grant helper yet — use the Konnect UI/API for MoonPay-style top-ups.
 
 ## Konnect first-time setup

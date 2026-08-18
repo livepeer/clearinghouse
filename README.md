@@ -180,10 +180,36 @@ Set `SIGNER_ETH_KEYSTORE_PATH=/data/keystore` (container path) and `SIGNER_ETH_A
 
 To change the host signing port or bind on all interfaces, use a Compose override file (see **Signing port loopback-only by default** under Design decisions).
 
+## One-command bootstrap
+
+```bash
+./bootstrap.sh
+```
+
+Runs Auth0 + OpenMeter catalog/billing, then emits `.env.livepeer`,
+`openmeter-billing.json`, and `sdk-config.json` into
+`auth0-provisioner/provision/`. Idempotent.
+
+| Flag | Effect |
+| --- | --- |
+| `--app NAME` | Which app in `apps.json` to write `sdk-config.json` for (default: the first) |
+| `--skip-auth0` | Reuse an existing `.env.livepeer` |
+| `--skip-catalog` | Skip OpenMeter catalog + billing provisioning |
+| `--out DIR` | Where to write the artifacts |
+
+Needs `jq`; Auth0 needs the `auth0` CLI (`auth0 login`); catalog needs `kongctl`
+plus `OPENMETER_API_KEY`. For Stripe PAYG profiles set `OPENMETER_STRIPE_API_KEY`
+(or `STRIPE_SECRET_KEY`). Platform URLs in `sdk-config.json` are deploy-time —
+override `SIGNER_PROXY_URL`, `SIGNER_PUBLIC_URL`, and `REMOTE_SIGNER_WEBHOOK_URL`.
+
+`sdk-config.json.openmeter` includes `freeBillingProfileId` / `stripeBillingProfileId`
+(and app ids) from billing bootstrap for builder-api / Railway.
+
 ## OpenMeter/Konnect bootstrap
 
-Provision meters, features, and Starter plans before starting the collector.
-Use the [`kongctl` bootstrap scripts](openmeter-collector/provision/README.md) or your existing Konnect setup.
+Provision meters, features, Starter plans, and Path A billing profiles before
+starting the collector. Prefer root `./bootstrap.sh` above, or run the
+[`kongctl` scripts](openmeter-collector/provision/README.md) directly.
 
 Aligned with pymthouse v0.3.3: Starter settles on **`network_spend`** with included
 **`discounts.usage`** ($5 default) and **`credit_then_invoice`**. Prepaid credits are
@@ -191,7 +217,8 @@ manual top-ups only.
 
 ```bash
 cd openmeter-collector/provision
-./bootstrap.sh catalog
+./bootstrap.sh catalog          # meters/features/plans + billing profiles
+./bootstrap.sh billing          # billing only (sandbox + Stripe PAYG)
 ./bootstrap.sh customer demo-client demo-user "Demo User" --subscribe
 ./bootstrap.sh owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner" --subscribe
 ```

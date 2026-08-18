@@ -5,3 +5,11 @@ node_modules/
 # Editor / OS
 .vscode/
 .DS_Store
+
+# Bootstrap artifacts — secrets / deploy-specific values
+.env.livepeer
+sdk-config.json
+openmeter-billing.json
+auth0-provisioner/provision/.env.livepeer
+auth0-provisioner/provision/sdk-config.json
+openmeter-collector/provision/openmeter-billing.json

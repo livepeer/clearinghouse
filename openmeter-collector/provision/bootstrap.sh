@@ -12,11 +12,18 @@
 #
 # Usage:
 #   ./bootstrap.sh catalog
-#       Ensure meters + features exist and the configured plan is present.
+#       Ensure meters + features exist and the configured plan is present, then
+#       run billing (sandbox + Stripe PAYG profiles).
+#
+#   ./bootstrap.sh billing
+#       Ensure sandbox + Stripe apps and billing profiles (Path A PAYG). Writes
+#       openmeter-billing.json (ids for sdk-config / Railway). Installs the
+#       Konnect Stripe app when OPENMETER_STRIPE_API_KEY or STRIPE_SECRET_KEY is set.
 #
 #   ./bootstrap.sh customer <client_id> <external_user_id> [display_name] [--subscribe]
 #       Ensure an OpenMeter customer keyed <client_id>:<external_user_id> exists with
 #       subject_keys = [<client_id>:<external_user_id>] (matches the CloudEvent subject).
+#       Pins the customer to the free/sandbox billing profile when known.
 #       M2M / managed users only. If external_user_id starts with owner:, delegates to
 #       the owner command (bare {users.id} customer key).
 #       --subscribe also ensures a subscription on the demo/M2M Starter plan (best-effort).
@@ -39,7 +46,7 @@
 #       Auth0 DCR auth strategy (runs portal-dcr if strategy missing).
 #
 #   ./bootstrap.sh all <client_id> <external_user_id> [display_name] [--subscribe]
-#       catalog + customer in one run.
+#       catalog (+ billing) + customer in one run.
 #
 set -euo pipefail
 
@@ -377,13 +384,298 @@ cmd_catalog() {
   ensure_meters
   ensure_features
   ensure_plans
+  cmd_billing
 }
+
+# --- billing (Path A: sandbox Starter + Stripe PAYG) -----------------------
+# Konnect Stripe marketplace install lives under /metering/v1 (not /v3/openmeter).
+KONNECT_STRIPE_INSTALL_DOCS="https://developer.konghq.com/metering-and-billing/stripe-integration/"
+FREE_BILLING_PROFILE_NAME="${OPENMETER_FREE_BILLING_PROFILE_NAME:-clearinghouse-free}"
+STRIPE_BILLING_PROFILE_NAME="${OPENMETER_STRIPE_BILLING_PROFILE_NAME:-clearinghouse-stripe}"
+STRIPE_APP_NAME="${OPENMETER_STRIPE_APP_NAME:-clearinghouse-stripe}"
+BILLING_OUT="${OPENMETER_BILLING_OUT:-$SCRIPT_DIR/openmeter-billing.json}"
+
+om_list_rows() {
+  # Konnect pages use data; some metering/v1 surfaces use items.
+  jq -c '(.data // .items // .) | if type == "array" then . else [] end'
+}
+
+profile_app_id() {
+  jq -r --arg slot "$1" '
+    .apps[$slot].id // .apps[$slot] // empty
+  ' <<<"$2"
+}
+
+profile_uses_app() {
+  local profile_json="$1" app_id="$2"
+  local tax invoicing payment
+  tax="$(profile_app_id tax "$profile_json")"
+  invoicing="$(profile_app_id invoicing "$profile_json")"
+  payment="$(profile_app_id payment "$profile_json")"
+  [ "$tax" = "$app_id" ] && [ "$invoicing" = "$app_id" ] && [ "$payment" = "$app_id" ]
+}
+
+list_apps_json() {
+  kapi_get "/apps" | om_list_rows
+}
+
+list_profiles_json() {
+  kapi_get "/profiles" | om_list_rows
+}
+
+find_app_by_type() {
+  local want_type="$1" ready_only="${2:-0}"
+  list_apps_json | jq -c --arg t "$want_type" --argjson ready "$ready_only" '
+    .[]
+    | select((.type // .definition.type // "") | ascii_downcase == ($t | ascii_downcase))
+    | select($ready == 0 or ((.status // "ready") | ascii_downcase) == "ready")
+  ' | head -n 1
+}
+
+find_profile_by_name() {
+  local name="$1"
+  list_profiles_json | jq -c --arg n "$name" '.[] | select(.name == $n)' | head -n 1
+}
+
+find_profile_for_app() {
+  local app_id="$1" row
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    if profile_uses_app "$row" "$app_id"; then
+      printf '%s' "$row"
+      return 0
+    fi
+  done < <(list_profiles_json | jq -c '.[]')
+  return 1
+}
+
+metering_v1_base() {
+  printf '%s/metering/v1' "$BASE"
+}
+
+# Install Konnect Stripe app via secret/restricted key when missing.
+# Path A only — does not create a billing profile (we create clearinghouse-stripe).
+install_stripe_app_with_api_key() {
+  local api_key="$1" name="$2"
+  local url body resp http_code err
+  url="$(metering_v1_base)/marketplace/listings/stripe/install/apikey"
+  body="$(jq -n --arg name "$name" --arg apiKey "$api_key" \
+    '{name:$name, apiKey:$apiKey, createBillingProfile:false}')"
+  err="$(mktemp)"
+  http_code="$(curl -sS -o "$err" -w '%{http_code}' -X POST "$url" \
+    -H "Authorization: Bearer $PAT" \
+    -H "Content-Type: application/json" \
+    -d "$body" || true)"
+  resp="$(cat "$err")"
+  rm -f "$err"
+  case "$http_code" in
+    200|201)
+      printf '%s' "$resp" | jq -r '.app.id // .id // empty'
+      return 0
+      ;;
+    409)
+      # Already installed for this Stripe account — resolve from /apps.
+      warn "stripe install conflict ($http_code) — resolving existing Stripe app"
+      return 1
+      ;;
+    *)
+      warn "stripe install failed HTTP $http_code: $(printf '%s' "$resp" | jq -r '.detail // .message // .title // .')"
+      return 1
+      ;;
+  esac
+}
+
+resolve_sandbox_app_id() {
+  if [ -n "${OPENMETER_SANDBOX_APP_ID:-}" ]; then
+    printf '%s' "$OPENMETER_SANDBOX_APP_ID"
+    return 0
+  fi
+  local app
+  app="$(find_app_by_type sandbox 0)"
+  [ -n "$app" ] || die "no sandbox app installed in Konnect — re-create the Metering & Billing org or install Sandbox"
+  jq -r '.id' <<<"$app"
+}
+
+resolve_stripe_app_id() {
+  if [ -n "${OPENMETER_STRIPE_APP_ID:-}" ]; then
+    printf '%s' "$OPENMETER_STRIPE_APP_ID"
+    return 0
+  fi
+  local app key installed
+  app="$(find_app_by_type stripe 1)"
+  if [ -n "$app" ]; then
+    jq -r '.id' <<<"$app"
+    return 0
+  fi
+
+  key="${OPENMETER_STRIPE_API_KEY:-${STRIPE_SECRET_KEY:-}}"
+  if [ -z "$key" ]; then
+    warn "no ready Stripe app — set OPENMETER_STRIPE_API_KEY (or STRIPE_SECRET_KEY), or install Stripe in Konnect ($KONNECT_STRIPE_INSTALL_DOCS)"
+    return 1
+  fi
+  info "installing Konnect Stripe app ($STRIPE_APP_NAME) via API key"
+  if installed="$(install_stripe_app_with_api_key "$key" "$STRIPE_APP_NAME")" && [ -n "$installed" ]; then
+    printf '%s' "$installed"
+    return 0
+  fi
+  app="$(find_app_by_type stripe 1)"
+  if [ -n "$app" ]; then
+    jq -r '.id' <<<"$app"
+    return 0
+  fi
+  return 1
+}
+
+billing_profile_create_body() {
+  local name="$1" app_id="$2" supplier_name="$3" default_flag="${4:-false}"
+  local anchor
+  anchor="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq -n \
+    --arg name "$name" \
+    --arg app "$app_id" \
+    --arg supplier "$supplier_name" \
+    --argjson default "$default_flag" \
+    --arg anchor "$anchor" \
+    '{
+       name: $name,
+       default: $default,
+       supplier: {
+         name: $supplier,
+         addresses: { billing_address: { country: "US" } }
+       },
+       workflow: {
+         collection: {
+           alignment: {
+             type: "anchored",
+             recurring_period: { interval: "P1D", anchor: $anchor }
+           }
+         },
+         invoicing: {
+           auto_advance: true,
+           draft_period: "P0D",
+           progressive_billing: true
+         },
+         payment: { collection_method: "charge_automatically" }
+       },
+       apps: {
+         tax: { id: $app },
+         invoicing: { id: $app },
+         payment: { id: $app }
+       }
+     }'
+}
+
+ensure_billing_profile_for_app() {
+  local name="$1" app_id="$2" supplier_name="$3" env_override="${4:-}"
+  local existing id body resp
+
+  if [ -n "$env_override" ]; then
+    printf '%s' "$env_override"
+    return 0
+  fi
+
+  existing="$(find_profile_by_name "$name" || true)"
+  if [ -z "$existing" ]; then
+    existing="$(find_profile_for_app "$app_id" || true)"
+  fi
+  if [ -n "$existing" ]; then
+    id="$(jq -r '.id' <<<"$existing")"
+    info "billing profile $name — exists ($id)"
+    printf '%s' "$id"
+    return 0
+  fi
+
+  body="$(billing_profile_create_body "$name" "$app_id" "$supplier_name" false)"
+  resp="$(printf '%s' "$body" | kapi_post /profiles)"
+  id="$(jq -r '.id // empty' <<<"$resp")"
+  [ -n "$id" ] || die "failed to create billing profile $name"
+  info "billing profile $name — created ($id)"
+  printf '%s' "$id"
+}
+
+write_billing_config() {
+  local sandbox_app_id="$1" free_profile_id="$2" stripe_app_id="${3:-}" stripe_profile_id="${4:-}"
+  local out_dir
+  out_dir="$(dirname "$BILLING_OUT")"
+  mkdir -p "$out_dir"
+  jq -n \
+    --arg url "$OPENMETER_URL" \
+    --arg trialFeatureKey "${OPENMETER_TRIAL_FEATURE_KEY:-network_spend}" \
+    --arg sandboxAppId "$sandbox_app_id" \
+    --arg stripeAppId "$stripe_app_id" \
+    --arg freeBillingProfileId "$free_profile_id" \
+    --arg stripeBillingProfileId "$stripe_profile_id" \
+    --arg freeBillingProfileName "$FREE_BILLING_PROFILE_NAME" \
+    --arg stripeBillingProfileName "$STRIPE_BILLING_PROFILE_NAME" \
+    '{
+       openmeter: {
+         url: $url,
+         trialFeatureKey: $trialFeatureKey,
+         sandboxAppId: $sandboxAppId,
+         stripeAppId: $stripeAppId,
+         freeBillingProfileId: $freeBillingProfileId,
+         stripeBillingProfileId: $stripeBillingProfileId,
+         freeBillingProfileName: $freeBillingProfileName,
+         stripeBillingProfileName: $stripeBillingProfileName
+       }
+     }' > "$BILLING_OUT"
+  info "wrote $BILLING_OUT"
+}
+
+# Pin customer to the free/sandbox profile so Starter does not hit a Stripe-default
+# profile before a payment method exists.
+apply_free_billing_profile() {
+  local customer_id="$1"
+  local profile_id="${OPENMETER_FREE_BILLING_PROFILE_ID:-}"
+  if [ -z "$profile_id" ] && [ -f "$BILLING_OUT" ]; then
+    profile_id="$(jq -r '.openmeter.freeBillingProfileId // empty' "$BILLING_OUT")"
+  fi
+  [ -n "$profile_id" ] || return 0
+
+  local body resp
+  body="$(jq -n --arg id "$profile_id" '{billing_profile:{id:$id}}')"
+  if resp="$(printf '%s' "$body" | kapi_put_soft "/customers/$customer_id/billing")" \
+    && [ -n "$resp" ]; then
+    info "billing  customer $customer_id — free profile $profile_id"
+  else
+    warn "billing  customer $customer_id — could not pin free profile $profile_id"
+  fi
+}
+
+cmd_billing() {
+  info "== billing ($BASE$PREFIX) =="
+  local sandbox_app_id free_profile_id stripe_app_id="" stripe_profile_id=""
+
+  sandbox_app_id="$(resolve_sandbox_app_id)"
+  info "sandbox app — $sandbox_app_id"
+
+  free_profile_id="$(ensure_billing_profile_for_app \
+    "$FREE_BILLING_PROFILE_NAME" \
+    "$sandbox_app_id" \
+    "Clearinghouse Free" \
+    "${OPENMETER_FREE_BILLING_PROFILE_ID:-}")"
+
+  if stripe_app_id="$(resolve_stripe_app_id)"; then
+    info "stripe app — $stripe_app_id"
+    stripe_profile_id="$(ensure_billing_profile_for_app \
+      "$STRIPE_BILLING_PROFILE_NAME" \
+      "$stripe_app_id" \
+      "Clearinghouse" \
+      "${OPENMETER_STRIPE_BILLING_PROFILE_ID:-}")"
+  else
+    warn "skipping Stripe PAYG profile — install Stripe then re-run: ./bootstrap.sh billing"
+  fi
+
+  write_billing_config "$sandbox_app_id" "$free_profile_id" "$stripe_app_id" "$stripe_profile_id"
+}
+
+kapi_put_soft() { kapi_run soft put "$1"; }
 
 # --- customer --------------------------------------------------------------
 # Find a customer by exact key. NOTE: the list filter is a partial match, so we
 # fetch and exact-match locally. For very large customer bases add pagination.
 find_customer() {
-  kapi_get "/customers" | jq -c --arg k "$1" '(.data // .)[] | select(.key == $k)' | head -n 1
+  kapi_get "/customers" | om_list_rows | jq -c --arg k "$1" '.[] | select(.key == $k)' | head -n 1
 }
 
 # Create/ensure a customer with exact key + subject_keys = [key]. Never mutates
@@ -412,6 +704,7 @@ ensure_customer_key() {
     fi
   fi
 
+  apply_free_billing_profile "$id"
   [ "$subscribe" = "1" ] && ensure_subscription "$id" "$key" "$role" || true
 }
 
@@ -1097,6 +1390,9 @@ case "$cmd" in
   catalog)
     cmd_catalog
     ;;
+  billing)
+    cmd_billing
+    ;;
   customer)
     ensure_customer "${1:-}" "${2:-}" "${3:-}" "$SUBSCRIBE"
     ;;
@@ -1117,7 +1413,7 @@ case "$cmd" in
     ensure_customer "${1:-}" "${2:-}" "${3:-}" "$SUBSCRIBE"
     ;;
   *)
-    die "unknown command '$cmd' (expected: catalog | customer | owner | auth0-dcr | portal-dcr | portal-publish | all)"
+    die "unknown command '$cmd' (expected: catalog | billing | customer | owner | auth0-dcr | portal-dcr | portal-publish | all)"
     ;;
 esac
 info "done."
