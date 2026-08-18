@@ -1,0 +1,25 @@
+{
+  "auth0": {
+    "domain": "test.us.auth0.com",
+    "issuer": "https://test.us.auth0.com/",
+    "jwksUrl": "https://test.us.auth0.com/.well-known/jwks.json",
+    "clientId": "pub_123",
+    "audience": "livepeer"
+  },
+  "signer": {
+    "proxyUrl": "https://your-platform.vercel.app/api/signer",
+    "publicUrl": "https://signer.your-domain.com",
+    "audience": "livepeer"
+  },
+  "remoteSigner": {
+    "webhookUrl": "https://your-platform.vercel.app/webhooks/remote-signer"
+  },
+  "openmeter": {
+    "url": "https://us.api.konghq.com/v3/openmeter",
+    "trialFeatureKey": "network_spend",
+    "sandboxAppId": "",
+    "stripeAppId": "",
+    "freeBillingProfileId": "",
+    "stripeBillingProfileId": ""
+  }
+}
