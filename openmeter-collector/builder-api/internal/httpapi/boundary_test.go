@@ -167,3 +167,14 @@ func TestCreateUserUnavailableWithoutDeps(t *testing.T) {
 		t.Fatalf("got %d, want 503", rec.Code)
 	}
 }
+
+func TestOIDCTokenUnavailableWithoutHandler(t *testing.T) {
+	h := newServer(&fakeUsageReader{}, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/oidc/token", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("got %d, want 503: %s", rec.Code, rec.Body.String())
+	}
+}

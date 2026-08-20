@@ -26,6 +26,10 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		writeTokenExchangeError(w, http.StatusMethodNotAllowed, "invalid_request", "method not allowed")
 		return
 	}
+	if s.tokenExchange == nil {
+		writeTokenExchangeError(w, http.StatusServiceUnavailable, "server_error", "token exchange is not configured")
+		return
+	}
 
 	req, err := parseTokenExchangeRequest(r)
 	if err != nil {
