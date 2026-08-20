@@ -42,6 +42,32 @@ Example shape:
 }
 ```
 
+### `GET /api/v1/users/me/balance`
+
+Same identity rules. Returns the live OpenMeter credit/entitlement snapshot
+for `OPENMETER_TRIAL_FEATURE_KEY` (the same source token exchange uses for
+allowance). No query parameters.
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $SIGNER_JWT" \
+  "$BUILDER_API/api/v1/users/me/balance" | jq .
+```
+
+Example shape:
+
+```json
+{
+  "clientId": "xEJfZBtEP0JLJtlXm9UnJrDrA9bwepLx",
+  "externalUserId": "demo-user",
+  "subject": "xEJfZBtEP0JLJtlXm9UnJrDrA9bwepLx:demo-user",
+  "feature": "network_spend",
+  "hasAccess": true,
+  "balanceUsdMicros": 5000000,
+  "source": "credits"
+}
+```
+
 ---
 
 ## Token minting
@@ -84,5 +110,6 @@ curl -sS \
 | `400` | Invalid query params (time window) |
 | `401` | Missing/invalid Bearer token (usage) or invalid client/token (exchange) |
 | `402` | `insufficient_allowance` on token exchange when allowance enforcement is enabled |
+| `404` | OpenMeter customer not found (balance) |
 | `502` | OpenMeter query failure |
 | `503` | JWT verifier or metering backend not configured |

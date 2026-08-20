@@ -11,9 +11,11 @@ import (
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/openmeter"
 )
 
-// UsageReader is the metering surface needed by user usage routes.
+// UsageReader is the metering surface needed by user usage and balance routes.
 type UsageReader interface {
 	QueryUsage(ctx context.Context, q openmeter.UsageQuery) ([]openmeter.UsageRow, error)
+	LookupCustomerByKey(ctx context.Context, key string) (*openmeter.Customer, error)
+	GetAccess(ctx context.Context, customerID, featureKey string) (*openmeter.Access, error)
 }
 
 type selfUsageResponse struct {
@@ -22,6 +24,16 @@ type selfUsageResponse struct {
 	Meter          string               `json:"meter"`
 	Subject        string               `json:"subject"`
 	Rows           []openmeter.UsageRow `json:"rows"`
+}
+
+type selfBalanceResponse struct {
+	ClientID         string `json:"clientId"`
+	ExternalUserID   string `json:"externalUserId"`
+	Subject          string `json:"subject"`
+	Feature          string `json:"feature"`
+	HasAccess        bool   `json:"hasAccess"`
+	BalanceUSDMicros int64  `json:"balanceUsdMicros"`
+	Source           string `json:"source"`
 }
 
 // authorizeUsageIdentity verifies a caller's Bearer JWT and returns the
@@ -88,6 +100,53 @@ func (s *Server) handleUsageSelf(w http.ResponseWriter, r *http.Request) {
 		Meter:          meter,
 		Subject:        subject,
 		Rows:           rows,
+	})
+}
+
+// handleBalanceSelf serves GET /api/v1/users/me/balance.
+//
+// Identity comes from the Bearer signer JWT. The live USD credit balance is
+// the same snapshot token exchange uses for allowance (credits, then
+// entitlement fallback) for OPENMETER_TRIAL_FEATURE_KEY.
+func (s *Server) handleBalanceSelf(w http.ResponseWriter, r *http.Request) {
+	if s.usageReader == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "usage backend is not configured")
+		return
+	}
+	clientID, externalUserID, ok := s.authorizeUsageIdentity(w, r)
+	if !ok {
+		return
+	}
+	subject := openmeter.CustomerKey(clientID, externalUserID)
+	customer, err := s.usageReader.LookupCustomerByKey(r.Context(), subject)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "customer lookup failed")
+		return
+	}
+	if customer == nil || strings.TrimSpace(customer.ID) == "" {
+		writeAPIError(w, http.StatusNotFound, "customer not found")
+		return
+	}
+	feature := strings.TrimSpace(s.cfg.OpenMeterTrialFeatureKey)
+	if feature == "" {
+		feature = "network_spend"
+	}
+	access, err := s.usageReader.GetAccess(r.Context(), customer.ID, feature)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "balance query failed")
+		return
+	}
+	if access == nil {
+		access = &openmeter.Access{HasAccess: false, BalanceUSDMicros: 0, Source: "none"}
+	}
+	writeJSON(w, http.StatusOK, selfBalanceResponse{
+		ClientID:         clientID,
+		ExternalUserID:   externalUserID,
+		Subject:          subject,
+		Feature:          feature,
+		HasAccess:        access.HasAccess,
+		BalanceUSDMicros: access.BalanceUSDMicros,
+		Source:           access.Source,
 	})
 }
 
