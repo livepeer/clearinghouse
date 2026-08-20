@@ -104,6 +104,12 @@ func (c *Client) EnsureCustomer(ctx context.Context, clientID, externalUserID, d
 	return &created, nil
 }
 
+// LookupCustomerByKey returns the customer for key, or (nil, nil) when missing.
+// Konnect credit and entitlement routes require the customer ULID, not this key.
+func (c *Client) LookupCustomerByKey(ctx context.Context, key string) (*Customer, error) {
+	return c.findByKey(ctx, key)
+}
+
 func (c *Client) findByKey(ctx context.Context, key string) (*Customer, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/customers", nil)
 	if err != nil {
