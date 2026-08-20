@@ -180,9 +180,39 @@ Set `SIGNER_ETH_KEYSTORE_PATH=/data/keystore` (container path) and `SIGNER_ETH_A
 
 To change the host signing port or bind on all interfaces, use a Compose override file (see **Signing port loopback-only by default** under Design decisions).
 
+## One-command bootstrap
+
+```bash
+./bootstrap.sh
+```
+
+Runs the Auth0 provisioner and the OpenMeter/Konnect catalog provisioner, then
+emits `.env.livepeer` and `sdk-config.json` into
+`auth0-provisioner/provision/`. Both provisioners are idempotent, so re-running
+only fills in what is missing.
+
+| Flag | Effect |
+| --- | --- |
+| `--app NAME` | Which app in `apps.json` to write `sdk-config.json` for (default: the first) |
+| `--skip-auth0` | Reuse an existing `.env.livepeer` |
+| `--skip-catalog` | Skip OpenMeter catalog provisioning |
+| `--out DIR` | Where to write the artifacts |
+
+Needs `jq`; Auth0 also needs the `auth0` CLI with an active `auth0 login`
+session, and the catalog needs `kongctl` plus `OPENMETER_API_KEY` (or
+`KONGCTL_DEFAULT_KONNECT_PAT`). The signer and webhook URLs baked into
+`sdk-config.json` are deploy-time values — override `SIGNER_PROXY_URL`,
+`SIGNER_PUBLIC_URL`, and `REMOTE_SIGNER_WEBHOOK_URL` once the platform is up.
+
+The orchestrator does not reimplement either provisioner. The Auth0 definition
+stays in `auth0-provisioner/provision/apps.json` and the catalog definition
+stays in `openmeter-collector/provision/catalog.json`; each remains the single
+source of truth for its half.
+
 ## OpenMeter/Konnect bootstrap
 
-Provision meters, features, and Starter plans before starting the collector.
+Run directly when you want the catalog without the Auth0 half, or need the
+per-customer subcommands.
 Use the [`kongctl` bootstrap scripts](openmeter-collector/provision/README.md) or your existing Konnect setup.
 
 Aligned with pymthouse v0.3.3: Starter settles on **`network_spend`** with included
