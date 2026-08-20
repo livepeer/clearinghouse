@@ -106,6 +106,19 @@ func TestRotateAPIKeySelfFormSubjectToken(t *testing.T) {
 	}
 }
 
+func TestRotateAPIKeySelfJSONSubjectToken(t *testing.T) {
+	t.Parallel()
+
+	h := newRotateTestServer(&fakeAuth0Users{rotateKey: "sk_new"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-key", strings.NewReader(`{"subject_token":"sk_demo"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestRotateAPIKeySelfUserNotFound(t *testing.T) {
 	t.Parallel()
 

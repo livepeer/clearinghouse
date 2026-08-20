@@ -131,6 +131,49 @@ func TestHandleOIDCTokenAPIKeyExchange(t *testing.T) {
 	}
 }
 
+func TestHandleOIDCTokenAPIKeyExchangeJSON(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{
+		Auth0Audience:     "livepeer-clearinghouse",
+		SignerM2MClientID: "m2m-client",
+		SignerM2MSecret:   "m2m-secret",
+		APIKeyPrefix:      "sk_",
+	}
+	handler := tokenexchange.NewHandler(
+		cfg,
+		nil,
+		&apikey.Store{
+			Prefix: "sk_",
+			Demo: map[string]apikey.DemoEntry{
+				"sk_demo": {ClientID: "pub-client", UserID: "demo-user"},
+			},
+		},
+		stubMinter{},
+		stubProvisioner{},
+	)
+	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil)
+
+	body := `{
+		"grant_type":"urn:ietf:params:oauth:grant-type:token-exchange",
+		"subject_token":"sk_demo",
+		"subject_token_type":"urn:ietf:params:oauth:token-type:access_token",
+		"audience":"livepeer-clearinghouse"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/oidc/token", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"access_token":"minted"`) {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
 func TestHandleOIDCTokenAPIKeyExchangeWithoutClientPath(t *testing.T) {
 	t.Parallel()
 

@@ -94,6 +94,20 @@
         "requestBody": {
           "required": false,
           "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "subject_token": {
+                    "type": "string",
+                    "description": "Alternative to Authorization Bearer; Auth0 user JWT or end-user API key (sk_*)"
+                  }
+                },
+                "required": [
+                  "subject_token"
+                ]
+              }
+            },
             "application/x-www-form-urlencoded": {
               "schema": {
                 "type": "object",
@@ -133,10 +147,15 @@
     "/api/v1/oidc/token": {
       "post": {
         "summary": "RFC 8693 signer session token exchange (client inferred)",
-        "description": "Exchanges an Auth0 end-user access token (device code / authorization code) or end-user API key (`sk_*`) for a short-lived signer JWT. The target app is inferred from the `subject_token`.",
+        "description": "Exchanges an Auth0 end-user access token (device code / authorization code) or end-user API key (`sk_*`) for a short-lived signer JWT. The target app is inferred from the `subject_token`. Accepts JSON (preferred) or `application/x-www-form-urlencoded` (OAuth 2.0 / RFC 8693 default).",
         "requestBody": {
           "required": true,
           "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenExchangeRequest"
+              }
+            },
             "application/x-www-form-urlencoded": {
               "schema": {
                 "$ref": "#/components/schemas/TokenExchangeRequest"

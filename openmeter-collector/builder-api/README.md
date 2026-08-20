@@ -166,6 +166,15 @@ curl -sS -X POST \
   "http://localhost:8095/api/v1/users/me/api-key"
 ```
 
+JSON body:
+
+```bash
+curl -sS -X POST \
+  -H "Content-Type: application/json" \
+  -d "{\"subject_token\":\"$SUBJECT_TOKEN\"}" \
+  "http://localhost:8095/api/v1/users/me/api-key"
+```
+
 Response:
 
 ```json
@@ -179,22 +188,32 @@ Response:
 
 ## Example: RFC 8693 signer session exchange
 
-Signer-session issuance uses **RFC 8693** at `POST /api/v1/oidc/token` with `application/x-www-form-urlencoded` body fields:
+Signer-session issuance uses **RFC 8693** at `POST /api/v1/oidc/token`. JSON is
+preferred; `application/x-www-form-urlencoded` is also accepted (OAuth 2.0 /
+RFC 8693 default).
 
-- `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`
-- `subject_token` — Auth0 user access token (device code) **or** end-user API key (`sk_*`)
-- `subject_token_type=urn:ietf:params:oauth:token-type:access_token`
-- `audience=livepeer-clearinghouse` (or omit; must match configured audience when provided)
-
-The subject token determines the target app (`azp`/`app_client_id` for JWTs, or
-API key ownership for `sk_*`). Optional HTTP Basic auth with the signer M2M
-client is supported for server-side callers.
-
-API key:
+JSON (preferred):
 
 ```bash
 set -a; source openmeter-collector/.env; set +a
 API_KEY=sk_...
+curl -sS \
+  -H "Content-Type: application/json" \
+  -d "$(jq -n \
+    --arg subject "$API_KEY" \
+    '{
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      subject_token: $subject,
+      subject_token_type: "urn:ietf:params:oauth:token-type:access_token",
+      requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
+      audience: "livepeer-clearinghouse"
+    }')" \
+  "http://localhost:8095/api/v1/oidc/token"
+```
+
+Form body (OAuth-compatible):
+
+```bash
 curl -sS \
   -H "Content-Type: application/x-www-form-urlencoded" \
   --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
@@ -204,6 +223,10 @@ curl -sS \
   --data-urlencode "audience=livepeer-clearinghouse" \
   "http://localhost:8095/api/v1/oidc/token"
 ```
+
+The subject token determines the target app (`azp`/`app_client_id` for JWTs, or
+API key ownership for `sk_*`). Optional HTTP Basic auth with the signer M2M
+client is supported for server-side callers.
 
 Device code (user JWT as `subject_token`):
 
