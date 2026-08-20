@@ -283,8 +283,7 @@ Plans and rate cards are still provisioned out of band by
 | --- | --- |
 | `OPENMETER_URL` / `OPENMETER_API_KEY` | Shared Kong OpenMeter organization (required) |
 | `OPENMETER_DEFAULT_PLAN_KEY` | Default `clearinghouse_default_ppu` |
-| `OPENMETER_TRIAL_FEATURE_KEY` | Default `network_spend` (maps to usage meter via catalog) |
-| `OPENMETER_USAGE_METER_KEY` | Optional override for usage queries (default derived from trial feature) |
+| `OPENMETER_TRIAL_FEATURE_KEY` | Default `network_spend` (also selects the usage meter via catalog) |
 | `OPENMETER_TRIAL_GRANT_USD_MICROS` | `0` disables auto trial grant |
 | `OPENMETER_ENFORCE_ALLOWANCE` | Default `true` |
 

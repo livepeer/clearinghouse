@@ -2,13 +2,6 @@ package config
 
 import "testing"
 
-func TestUsageMeterKeyExplicit(t *testing.T) {
-	cfg := Config{OpenMeterUsageMeterKey: "signed_ticket_count"}
-	if got := cfg.UsageMeterKey(); got != "signed_ticket_count" {
-		t.Fatalf("got %q, want signed_ticket_count", got)
-	}
-}
-
 func TestUsageMeterKeyFromFeature(t *testing.T) {
 	tests := []struct {
 		feature string

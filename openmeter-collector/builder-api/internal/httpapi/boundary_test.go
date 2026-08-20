@@ -49,9 +49,9 @@ func (f fakeUsageVerifier) VerifyUserAccessToken(context.Context, string, string
 
 func newServer(usageReader httpapi.UsageReader, verifier tokenexchange.UserTokenVerifier) http.Handler {
 	cfg := config.Config{
-		SignerM2MClientID:      platformID,
-		SignerM2MSecret:        platformSecret,
-		OpenMeterUsageMeterKey: "billable_usd_micros",
+		SignerM2MClientID:        platformID,
+		SignerM2MSecret:          platformSecret,
+		OpenMeterTrialFeatureKey: "billable_spend",
 	}
 	return httpapi.NewServer(cfg, nil, nil, nil, nil, verifier, nil, usageReader).Handler()
 }

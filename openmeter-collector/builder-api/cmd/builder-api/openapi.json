@@ -186,7 +186,7 @@
     "/api/v1/users/me/usage": {
       "get": {
         "summary": "Query metered usage for the authenticated user",
-        "description": "User-scoped usage route. Identity is derived from the Bearer signer JWT; the app client id is inferred from token claims. The meter slug is fixed by deployment config (OPENMETER_USAGE_METER_KEY or OPENMETER_TRIAL_FEATURE_KEY).",
+        "description": "User-scoped usage route. Identity is derived from the Bearer signer JWT; the app client id is inferred from token claims. The meter slug is fixed by OPENMETER_TRIAL_FEATURE_KEY via the provisioned catalog.",
         "security": [
           {
             "signerBearer": []

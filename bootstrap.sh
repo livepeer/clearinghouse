@@ -25,7 +25,6 @@
 #   OPENMETER_URL                 default https://us.api.konghq.com/v3/openmeter
 #   OPENMETER_API_KEY             Konnect PAT (kpat_…) for catalog provisioning
 #   OPENMETER_TRIAL_FEATURE_KEY   default network_spend
-#   OPENMETER_USAGE_METER_KEY     optional; default derived from trial feature
 #   SIGNER_PROXY_URL / SIGNER_PUBLIC_URL / REMOTE_SIGNER_WEBHOOK_URL
 #                                 platform URLs baked into sdk-config.json
 set -euo pipefail

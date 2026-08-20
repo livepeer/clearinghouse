@@ -14,8 +14,7 @@ Interactive OpenAPI: `GET /api/v1/docs` (spec at `/api/v1/openapi.json`).
 Identity is derived from JWT claims (`app_client_id`, `external_user_id`) via
 identity-webhook verification. The server always queries exactly one usage
 subject: `{clientId}:{externalUserId}` and one meter slug from deployment
-config (`OPENMETER_USAGE_METER_KEY`, or derived from `OPENMETER_TRIAL_FEATURE_KEY`
-via the provisioned catalog).
+config (`OPENMETER_TRIAL_FEATURE_KEY` via the provisioned catalog).
 
 | Query | Required | Notes |
 | --- | --- | --- |
