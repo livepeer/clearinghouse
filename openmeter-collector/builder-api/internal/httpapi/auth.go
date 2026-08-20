@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"net/http"
 	"net/url"
@@ -9,11 +10,16 @@ import (
 
 // M2MAuth validates HTTP Basic auth against the configured signer M2M client.
 func M2MAuth(r *http.Request, expectedClientID, expectedSecret string) bool {
+	if strings.TrimSpace(expectedClientID) == "" || strings.TrimSpace(expectedSecret) == "" {
+		return false
+	}
 	clientID, secret, ok := ClientCredentialsFromRequest(r, nil)
 	if !ok {
 		return false
 	}
-	return clientID == expectedClientID && secret == expectedSecret
+	clientOK := subtle.ConstantTimeCompare([]byte(clientID), []byte(expectedClientID)) == 1
+	secretOK := subtle.ConstantTimeCompare([]byte(secret), []byte(expectedSecret)) == 1
+	return clientOK && secretOK
 }
 
 // ClientCredentialsFromRequest extracts OAuth client credentials from Basic auth

@@ -28,9 +28,6 @@
         "description": "Creates an Auth0 Database user, upserts the OpenMeter customer, and optionally issues an end-user API key.",
         "security": [
           {
-            "tenantBasic": []
-          },
-          {
             "m2mBasic": []
           }
         ],
@@ -85,24 +82,80 @@
         }
       }
     },
-    "/api/v1/apps/{clientId}/oidc/token": {
+    "/api/v1/users/me/api-key": {
       "post": {
-        "summary": "RFC 8693 signer session token exchange",
-        "description": "Exchanges an Auth0 end-user access token (device code / authorization code) or end-user API key (`sk_*`) for a short-lived signer JWT. The `{clientId}` path segment is the public Auth0 app client id. Authenticate with the end-user `subject_token`; optional HTTP Basic with the signer M2M client is supported for server-side callers.",
-        "parameters": [
+        "summary": "Rotate the authenticated user's API key",
+        "description": "Issues a new long-lived end-user API key (`sk_*`). Identity is derived from a subject token (Bearer header or form `subject_token`): Auth0 user JWT or existing `sk_*` API key. The app client id is inferred from the token. The previous key is invalidated immediately.",
+        "security": [
           {
-            "name": "clientId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Public Auth0 client id for the integrator app"
+            "subjectBearer": []
           }
         ],
         "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "subject_token": {
+                    "type": "string",
+                    "description": "Alternative to Authorization Bearer; Auth0 user JWT or end-user API key (sk_*)"
+                  }
+                },
+                "required": [
+                  "subject_token"
+                ]
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "subject_token": {
+                    "type": "string",
+                    "description": "Alternative to Authorization Bearer; Auth0 user JWT or end-user API key (sk_*)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "API key rotated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateAPIKeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid subject token"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "503": {
+            "description": "Subject resolution or Auth0 is not configured"
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/token": {
+      "post": {
+        "summary": "RFC 8693 signer session token exchange (client inferred)",
+        "description": "Exchanges an Auth0 end-user access token (device code / authorization code) or end-user API key (`sk_*`) for a short-lived signer JWT. The target app is inferred from the `subject_token`. Accepts JSON (preferred) or `application/x-www-form-urlencoded` (OAuth 2.0 / RFC 8693 default).",
+        "requestBody": {
           "required": true,
           "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenExchangeRequest"
+              }
+            },
             "application/x-www-form-urlencoded": {
               "schema": {
                 "$ref": "#/components/schemas/TokenExchangeRequest"
@@ -130,42 +183,16 @@
         }
       }
     },
-    "/api/v1/apps/{clientId}/usage": {
+    "/api/v1/users/me/usage": {
       "get": {
-        "summary": "Query metered usage for an app",
-        "description": "Subjects are derived from the authorized clientId, never from caller input. Without externalUserId every customer of the app is included.",
+        "summary": "Query metered usage for the authenticated user",
+        "description": "User-scoped usage route. Identity is derived from the Bearer signer JWT; the app client id is inferred from token claims. The meter slug is fixed by OPENMETER_TRIAL_FEATURE_KEY via the provisioned catalog.",
         "security": [
           {
-            "tenantBasic": []
-          },
-          {
-            "m2mBasic": []
+            "signerBearer": []
           }
         ],
         "parameters": [
-          {
-            "name": "clientId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "meter",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "externalUserId",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "name": "from",
             "in": "query",
@@ -195,156 +222,19 @@
         ],
         "responses": {
           "200": {
-            "description": "Usage rows scoped to the app"
+            "description": "Usage rows scoped to the authenticated user"
           },
           "400": {
-            "description": "Invalid meter, time window, or externalUserId"
+            "description": "Invalid time window"
           },
           "401": {
-            "description": "Missing or invalid credentials"
-          },
-          "404": {
-            "description": "Unknown app, or the caller does not own it"
+            "description": "Missing or invalid bearer token"
           },
           "502": {
             "description": "Metering backend unavailable"
           },
           "503": {
-            "description": "Metering backend not configured"
-          }
-        }
-      }
-    },
-    "/api/v1/apps/{clientId}/users/{externalUserId}/access": {
-      "get": {
-        "summary": "Read a user's allowance / entitlement balance",
-        "security": [
-          {
-            "tenantBasic": []
-          },
-          {
-            "m2mBasic": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "clientId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "externalUserId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Must not contain ':' \u2014 customer keys are 'clientId:externalUserId'."
-          },
-          {
-            "name": "feature",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Access snapshot"
-          },
-          "400": {
-            "description": "Invalid externalUserId"
-          },
-          "401": {
-            "description": "Missing or invalid credentials"
-          },
-          "404": {
-            "description": "Unknown app, or the caller does not own it"
-          },
-          "502": {
-            "description": "Metering backend unavailable"
-          },
-          "503": {
-            "description": "Metering backend not configured"
-          }
-        }
-      }
-    },
-    "/api/v1/apps/{clientId}/users/{externalUserId}/grants": {
-      "post": {
-        "summary": "Grant a user allowance",
-        "security": [
-          {
-            "tenantBasic": []
-          },
-          {
-            "m2mBasic": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "clientId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "externalUserId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Must not contain ':' \u2014 customer keys are 'clientId:externalUserId'."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "amountUsdMicros"
-                ],
-                "properties": {
-                  "amountUsdMicros": {
-                    "type": "integer",
-                    "format": "int64",
-                    "minimum": 1
-                  },
-                  "featureKey": {
-                    "type": "string"
-                  },
-                  "grantKey": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Grant applied"
-          },
-          "400": {
-            "description": "Invalid request"
-          },
-          "401": {
-            "description": "Missing or invalid credentials"
-          },
-          "404": {
-            "description": "Unknown app, or the caller does not own it"
-          },
-          "502": {
-            "description": "Grant failed"
+            "description": "JWT verifier or metering backend is not configured"
           }
         }
       }
@@ -357,10 +247,16 @@
         "scheme": "basic",
         "description": "M2M client id and secret (users:write, RFC 8693 token exchange)"
       },
-      "tenantBasic": {
+      "signerBearer": {
         "type": "http",
-        "scheme": "basic",
-        "description": "Tenant admin credentials: username is the tenant clientId, password is its secret from TENANT_ADMIN_KEYS. A tenant may only address its own clientId; the platform M2M credential (m2mBasic) may address any. A request for another tenant answers 404, not 403, so that a shared OpenMeter tenant does not confirm which client ids exist."
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Signer JWT minted by the RFC 8693 token-exchange endpoint."
+      },
+      "subjectBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Auth0 user access token (JWT) or end-user API key (sk_*). May also be supplied as form field subject_token."
       }
     },
     "schemas": {
@@ -407,6 +303,30 @@
           "apiKey": {
             "type": "string",
             "description": "Returned once when issueApiKey is true"
+          }
+        }
+      },
+      "RotateAPIKeyResponse": {
+        "type": "object",
+        "required": [
+          "clientId",
+          "externalUserId",
+          "apiKey",
+          "status"
+        ],
+        "properties": {
+          "clientId": {
+            "type": "string"
+          },
+          "externalUserId": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "New plaintext API key returned once"
+          },
+          "status": {
+            "type": "string"
           }
         }
       },

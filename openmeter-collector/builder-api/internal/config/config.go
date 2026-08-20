@@ -28,7 +28,6 @@ type Config struct {
 	DiscoveryURL                 string
 	APIKeyPrefix                 string
 	DemoAPIKeys                  string
-	TenantAdminKeys              string
 	// IdentityWebhookURL and WebhookSecret delegate end-user JWT verification to the
 	// identity-webhook service (POST /authorize). Same URL as go-livepeer
 	// -remoteSignerWebhookUrl (REMOTE_SIGNER_WEBHOOK_URL). JWT subject tokens require both.
@@ -51,7 +50,7 @@ func Load() (Config, error) {
 		OpenMeterURL:              envOr("OPENMETER_URL", "https://us.api.konghq.com/v3/openmeter"),
 		OpenMeterAPIKey:           strings.TrimSpace(os.Getenv("OPENMETER_API_KEY")),
 		OpenMeterDefaultPlanKey:   envOr("OPENMETER_DEFAULT_PLAN_KEY", "clearinghouse_default_ppu"),
-		OpenMeterTrialFeatureKey:  envOr("OPENMETER_TRIAL_FEATURE_KEY", "billable_spend"),
+		OpenMeterTrialFeatureKey:  envOr("OPENMETER_TRIAL_FEATURE_KEY", "network_spend"),
 		OpenMeterEnforceAllowance: envBool("OPENMETER_ENFORCE_ALLOWANCE", true),
 		SignerURL:                 strings.TrimSpace(os.Getenv("SIGNER_URL")),
 		DiscoveryURL: envOr(
@@ -60,7 +59,6 @@ func Load() (Config, error) {
 		),
 		APIKeyPrefix:       envOr("API_KEY_PREFIX", "sk_"),
 		DemoAPIKeys:        strings.TrimSpace(os.Getenv("DEMO_API_KEYS")),
-		TenantAdminKeys:    strings.TrimSpace(os.Getenv("TENANT_ADMIN_KEYS")),
 		IdentityWebhookURL: strings.TrimSpace(os.Getenv("REMOTE_SIGNER_WEBHOOK_URL")),
 		WebhookSecret:      strings.TrimSpace(os.Getenv("WEBHOOK_SECRET")),
 	}
@@ -109,6 +107,18 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// UsageMeterKey returns the OpenMeter meter slug for user usage queries.
+// It is derived from OPENMETER_TRIAL_FEATURE_KEY using the feature→meter
+// mapping in catalog.json (network_spend → network_fee_usd_micros).
+func (c Config) UsageMeterKey() string {
+	switch strings.TrimSpace(c.OpenMeterTrialFeatureKey) {
+	case "billable_spend":
+		return "billable_usd_micros"
+	default:
+		return "network_fee_usd_micros"
+	}
 }
 
 func envOr(key, fallback string) string {

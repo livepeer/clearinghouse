@@ -107,16 +107,19 @@ func testHandlerWith(t *testing.T, verifier tokenexchange.UserTokenVerifier, pro
 	)
 }
 
-func TestExchangeRejectsMissingPublicClientID(t *testing.T) {
+func TestExchangeDerivesPublicClientIDWhenOmitted(t *testing.T) {
 	t.Parallel()
 	h := testHandler(t, nil)
-	_, err := h.Exchange(context.Background(), tokenexchange.Request{
+	result, err := h.Exchange(context.Background(), tokenexchange.Request{
 		GrantType:        tokenexchange.GrantType,
 		SubjectToken:     "sk_demo",
 		SubjectTokenType: tokenexchange.SubjectAccessTokenType,
 	}, "corr")
-	if err == nil || err.(*tokenexchange.Error).Code != "invalid_request" {
-		t.Fatalf("expected invalid_request, got %v", err)
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if result.AccessToken != "minted-jwt" {
+		t.Fatalf("access_token = %q", result.AccessToken)
 	}
 }
 

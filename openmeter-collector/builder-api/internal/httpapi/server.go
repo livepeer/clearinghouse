@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -11,20 +12,24 @@ import (
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/auth0mint"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/config"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/openmeter"
-	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/tenantauth"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/tokenexchange"
 )
+
+type auth0UserAdmin interface {
+	UpsertUser(ctx context.Context, publicClientID, externalUserID, email, connection string, issueAPIKey bool, keyPrefix string) (*auth0mgmt.UserRecord, error)
+	RotateAPIKey(ctx context.Context, publicClientID, externalUserID, keyPrefix string) (string, error)
+}
 
 // Server wires Builder API routes and dependencies.
 type Server struct {
 	cfg           config.Config
-	auth0         *auth0mgmt.Client
+	auth0         auth0UserAdmin
 	minter        *auth0mint.Minter
 	openmeter     openmeterSession
 	tokenExchange *tokenexchange.Handler
+	userVerifier  tokenexchange.UserTokenVerifier
 	openAPISpec   []byte
-	tenantAuth    *tenantauth.Authenticator
-	admin         OpenMeterAdmin
+	usageReader   UsageReader
 }
 
 type openmeterSession interface {
@@ -32,16 +37,25 @@ type openmeterSession interface {
 }
 
 // NewServer constructs the HTTP API server.
-func NewServer(cfg config.Config, auth0 *auth0mgmt.Client, minter *auth0mint.Minter, om openmeterSession, tokenExchange *tokenexchange.Handler, openAPISpec []byte, tenantAuth *tenantauth.Authenticator, admin OpenMeterAdmin) *Server {
+func NewServer(
+	cfg config.Config,
+	auth0 auth0UserAdmin,
+	minter *auth0mint.Minter,
+	om openmeterSession,
+	tokenExchange *tokenexchange.Handler,
+	userVerifier tokenexchange.UserTokenVerifier,
+	openAPISpec []byte,
+	usageReader UsageReader,
+) *Server {
 	return &Server{
 		cfg:           cfg,
 		auth0:         auth0,
 		minter:        minter,
 		openmeter:     om,
 		tokenExchange: tokenExchange,
+		userVerifier:  userVerifier,
 		openAPISpec:   openAPISpec,
-		tenantAuth:    tenantAuth,
-		admin:         admin,
+		usageReader:   usageReader,
 	}
 }
 
@@ -51,10 +65,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("GET /api/v1/docs", s.handleDocs)
 	mux.HandleFunc("POST /api/v1/apps/{clientId}/users", s.handleCreateUser)
-	mux.HandleFunc("POST /api/v1/apps/{clientId}/oidc/token", s.handleOIDCToken)
-	mux.HandleFunc("GET /api/v1/apps/{clientId}/usage", s.handleUsage)
-	mux.HandleFunc("GET /api/v1/apps/{clientId}/users/{externalUserId}/access", s.handleUserAccess)
-	mux.HandleFunc("POST /api/v1/apps/{clientId}/users/{externalUserId}/grants", s.handleGrantAllowance)
+	mux.HandleFunc("POST /api/v1/users/me/api-key", s.handleRotateAPIKeySelf)
+	mux.HandleFunc("POST /api/v1/oidc/token", s.handleOIDCToken)
+	mux.HandleFunc("GET /api/v1/users/me/usage", s.handleUsageSelf)
 	return mux
 }
 
@@ -104,8 +117,21 @@ type createUserResponse struct {
 }
 
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
-	clientID, ok := s.authorizeTenant(w, r)
-	if !ok {
+	clientID := strings.TrimSpace(r.PathValue("clientId"))
+	if clientID == "" {
+		writeAPIError(w, http.StatusBadRequest, "clientId is required")
+		return
+	}
+	if !M2MAuth(r, s.cfg.SignerM2MClientID, s.cfg.SignerM2MSecret) {
+		writeAPIError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if s.auth0 == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "auth0 is not configured")
+		return
+	}
+	if s.openmeter == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "openmeter is not configured")
 		return
 	}
 
@@ -152,6 +178,68 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Email:          user.Email,
 		Status:         "active",
 		APIKey:         user.APIKey,
+	})
+}
+
+type rotateAPIKeyResponse struct {
+	ClientID       string `json:"clientId"`
+	ExternalUserID string `json:"externalUserId"`
+	APIKey         string `json:"apiKey"`
+	Status         string `json:"status"`
+}
+
+// handleRotateAPIKeySelf serves POST /api/v1/users/me/api-key.
+//
+// Identity is derived from a subject token (Bearer header or form subject_token):
+// an Auth0 user JWT or end-user API key (sk_*). The app client id is inferred
+// from the token, matching the RFC 8693 token-exchange subject resolution path.
+func (s *Server) handleRotateAPIKeySelf(w http.ResponseWriter, r *http.Request) {
+	if s.tokenExchange == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "subject token resolution is not configured")
+		return
+	}
+	if s.auth0 == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "auth0 is not configured")
+		return
+	}
+
+	subjectToken, err := subjectTokenFromRequest(r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "malformed subject token request")
+		return
+	}
+	if subjectToken == "" {
+		writeBearerUnauthorized(w, "invalid_token", "missing subject token")
+		return
+	}
+
+	clientID, externalUserID, err := s.tokenExchange.ResolveSubject(r.Context(), subjectToken, "")
+	if err != nil {
+		writeBearerUnauthorized(w, "invalid_token", "invalid subject token")
+		return
+	}
+	clientID = strings.TrimSpace(clientID)
+	externalUserID = strings.TrimSpace(externalUserID)
+	if clientID == "" || externalUserID == "" || strings.Contains(externalUserID, ":") {
+		writeBearerUnauthorized(w, "invalid_token", "invalid subject token")
+		return
+	}
+
+	plaintext, err := s.auth0.RotateAPIKey(r.Context(), clientID, externalUserID, s.cfg.APIKeyPrefix)
+	if err != nil {
+		if errors.Is(err, auth0mgmt.ErrUserNotFound) {
+			writeAPIError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, rotateAPIKeyResponse{
+		ClientID:       clientID,
+		ExternalUserID: externalUserID,
+		APIKey:         plaintext,
+		Status:         "active",
 	})
 }
 

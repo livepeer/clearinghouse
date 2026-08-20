@@ -10,30 +10,29 @@ Go HTTP service co-located in the `openmeter-collector` container. Provisions **
 
 Scalar docs: `GET /api/v1/docs` (spec at `/api/v1/openapi.json`).
 
-**Admin surface.** Usage queries and allowance/entitlement operations are exposed here, scoped per tenant against a single shared OpenMeter organization. See [docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md) for the boundary model and [docs/USAGE.md](docs/USAGE.md) for integrator curl examples against the live API.
+**Usage surface.** End users read their own usage with signer JWT Bearer auth against a single shared OpenMeter organization. See [docs/USAGE.md](docs/USAGE.md) for curl examples.
 
-## Admin routes
+## Usage route
 
-Tenant-scoped. Authenticate with HTTP Basic as either the platform M2M
-credential (any tenant) or a tenant's own `clientId` + secret from
-`TENANT_ADMIN_KEYS` (that tenant only). A request for someone else's app
-answers `404`, not `403`.
+User-scoped usage route:
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/v1/apps/{clientId}/usage?meter=&from=&to=[&externalUserId=][&groupBy=]` | Metered usage, scoped to the app |
-| `GET` | `/api/v1/apps/{clientId}/users/{externalUserId}/access[?feature=]` | Allowance / entitlement balance |
-| `POST` | `/api/v1/apps/{clientId}/users/{externalUserId}/grants` | Grant allowance (`amountUsdMicros`, optional `featureKey`, `grantKey`) |
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/users/me/usage?from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
 
-```bash
-curl -u "app_abc123:$TENANT_SECRET" \
-  "$BUILDER_API/api/v1/apps/app_abc123/usage?meter=billable_usd_micros"
-```
+The server derives `clientId` + `externalUserId` from token claims and queries exactly one usage subject.
 
-Subjects are derived from the **authorized** client id, never from caller
-input, and `externalUserId` may not contain `:`. The full model, threat
-boundary, and operator prerequisites are in
-[docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md).
+### User self route
+
+End users can read only their own usage with a signer JWT, without passing an
+app id in the path:
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/users/me/usage?from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
+
+Identity is derived from JWT claims (`app_client_id`, `external_user_id`) via
+the identity-webhook verifier.
 
 ## Token exchange flow
 
@@ -61,7 +60,8 @@ parked. Builder-api talks only to the shared org.
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/apps/{clientId}/users` | M2M Basic | Create/upsert Auth0 user + OpenMeter customer; returns `apiKey` once |
-| `POST` | `/api/v1/apps/{clientId}/oidc/token` | RFC 8693 form + subject token | Exchange Auth0 user JWT or `sk_*` API key for signer JWT; 402 if allowance exhausted |
+| `POST` | `/api/v1/users/me/api-key` | Subject token (Bearer or form) | Rotate end-user API key; client inferred from token |
+| `POST` | `/api/v1/oidc/token` | RFC 8693 form + subject token | Exchange Auth0 user JWT or `sk_*` API key for signer JWT; client inferred from token |
 
 ## Auth0 prerequisites
 
@@ -143,24 +143,77 @@ curl -sS -u "$AUTH0_SIGNER_M2M_CLIENT_ID:$AUTH0_SIGNER_M2M_CLIENT_SECRET" \
 
 Use the public client id from `.env.livepeer` as the `{clientId}` path segment (e.g. `DEMO_APP_AUTH0_PUBLIC_CLIENT_ID`).
 
+## Example: rotate end-user API key
+
+When an end-user loses their `sk_*` key (or it is compromised), rotate using the
+same subject tokens accepted by token exchange. Identity is inferred from the
+token — no `clientId` in the path.
+
+Bearer (existing API key or Auth0 user JWT):
+
+```bash
+curl -sS -X POST \
+  -H "Authorization: Bearer $SUBJECT_TOKEN" \
+  "http://localhost:8095/api/v1/users/me/api-key"
+```
+
+Form body (same shape as token exchange subject fields):
+
+```bash
+curl -sS -X POST \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "subject_token=$SUBJECT_TOKEN" \
+  "http://localhost:8095/api/v1/users/me/api-key"
+```
+
+JSON body:
+
+```bash
+curl -sS -X POST \
+  -H "Content-Type: application/json" \
+  -d "{\"subject_token\":\"$SUBJECT_TOKEN\"}" \
+  "http://localhost:8095/api/v1/users/me/api-key"
+```
+
+Response:
+
+```json
+{
+  "clientId": "...",
+  "externalUserId": "user-123",
+  "apiKey": "sk_...",
+  "status": "active"
+}
+```
+
 ## Example: RFC 8693 signer session exchange
 
-Signer-session issuance uses **RFC 8693** at `POST /api/v1/apps/{clientId}/oidc/token` with `application/x-www-form-urlencoded` body fields:
+Signer-session issuance uses **RFC 8693** at `POST /api/v1/oidc/token`. JSON is
+preferred; `application/x-www-form-urlencoded` is also accepted (OAuth 2.0 /
+RFC 8693 default).
 
-- `{clientId}` — public Auth0 client id for the integrator app (same path segment as `/users`)
-- `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`
-- `subject_token` — Auth0 user access token (device code) **or** end-user API key (`sk_*`)
-- `subject_token_type=urn:ietf:params:oauth:token-type:access_token`
-- `audience=livepeer-clearinghouse` (or omit; must match configured audience when provided)
-
-The subject token must belong to the public client named in the path (`azp` for JWTs, or API key issued for that client). Optional HTTP Basic auth with the signer M2M client is supported for server-side callers.
-
-API key:
+JSON (preferred):
 
 ```bash
 set -a; source openmeter-collector/.env; set +a
-PUBLIC_CLIENT_ID="$DEMO_APP_AUTH0_PUBLIC_CLIENT_ID"
 API_KEY=sk_...
+curl -sS \
+  -H "Content-Type: application/json" \
+  -d "$(jq -n \
+    --arg subject "$API_KEY" \
+    '{
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      subject_token: $subject,
+      subject_token_type: "urn:ietf:params:oauth:token-type:access_token",
+      requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
+      audience: "livepeer-clearinghouse"
+    }')" \
+  "http://localhost:8095/api/v1/oidc/token"
+```
+
+Form body (OAuth-compatible):
+
+```bash
 curl -sS \
   -H "Content-Type: application/x-www-form-urlencoded" \
   --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
@@ -168,13 +221,16 @@ curl -sS \
   --data-urlencode "subject_token_type=urn:ietf:params:oauth:token-type:access_token" \
   --data-urlencode "requested_token_type=urn:ietf:params:oauth:token-type:access_token" \
   --data-urlencode "audience=livepeer-clearinghouse" \
-  "http://localhost:8095/api/v1/apps/${PUBLIC_CLIENT_ID}/oidc/token"
+  "http://localhost:8095/api/v1/oidc/token"
 ```
+
+The subject token determines the target app (`azp`/`app_client_id` for JWTs, or
+API key ownership for `sk_*`). Optional HTTP Basic auth with the signer M2M
+client is supported for server-side callers.
 
 Device code (user JWT as `subject_token`):
 
 ```bash
-PUBLIC_CLIENT_ID="$DEMO_APP_AUTH0_PUBLIC_CLIENT_ID"
 OIDC_TOKEN=...   # access_token from device code flow
 curl -sS \
   -H "Content-Type: application/x-www-form-urlencoded" \
@@ -183,7 +239,7 @@ curl -sS \
   --data-urlencode "subject_token_type=urn:ietf:params:oauth:token-type:access_token" \
   --data-urlencode "requested_token_type=urn:ietf:params:oauth:token-type:access_token" \
   --data-urlencode "audience=livepeer-clearinghouse" \
-  "http://localhost:8095/api/v1/apps/${PUBLIC_CLIENT_ID}/oidc/token"
+  "http://localhost:8095/api/v1/oidc/token"
 ```
 
 The OpenMeter customer key is `{clientId}:{sub}` (e.g. `pub:google-oauth2|…`), matching the CloudEvent `subject`.
@@ -218,8 +274,8 @@ Customers are upserted with:
 This matches the collector CloudEvent `subject` / `auth_id` contract.
 
 Plans and rate cards are still provisioned out of band by
-`openmeter-collector/provision/bootstrap.sh`. Usage and allowance reads go
-through the admin routes above.
+`openmeter-collector/provision/bootstrap.sh`. Usage reads go through
+`GET /api/v1/users/me/usage`.
 
 ## Env (metering)
 
@@ -227,7 +283,7 @@ through the admin routes above.
 | --- | --- |
 | `OPENMETER_URL` / `OPENMETER_API_KEY` | Shared Kong OpenMeter organization (required) |
 | `OPENMETER_DEFAULT_PLAN_KEY` | Default `clearinghouse_default_ppu` |
-| `OPENMETER_TRIAL_FEATURE_KEY` | Default `billable_spend` |
+| `OPENMETER_TRIAL_FEATURE_KEY` | Default `network_spend` (also selects the usage meter via catalog) |
 | `OPENMETER_TRIAL_GRANT_USD_MICROS` | `0` disables auto trial grant |
 | `OPENMETER_ENFORCE_ALLOWANCE` | Default `true` |
 

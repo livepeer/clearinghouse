@@ -2,10 +2,7 @@ package httpapi
 
 import (
 	"errors"
-	"io"
 	"net/http"
-	"net/url"
-	"strings"
 
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/tokenexchange"
 )
@@ -29,43 +26,15 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		writeTokenExchangeError(w, http.StatusMethodNotAllowed, "invalid_request", "method not allowed")
 		return
 	}
-
-	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
-	if !strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
-		writeTokenExchangeError(w, http.StatusBadRequest, "invalid_request", "content-type must be application/x-www-form-urlencoded")
+	if s.tokenExchange == nil {
+		writeTokenExchangeError(w, http.StatusServiceUnavailable, "server_error", "token exchange is not configured")
 		return
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	req, err := parseTokenExchangeRequest(r)
 	if err != nil {
-		writeTokenExchangeError(w, http.StatusBadRequest, "invalid_request", "unable to read request body")
+		writeTokenExchangeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
-	}
-	defer r.Body.Close()
-
-	form, err := url.ParseQuery(string(raw))
-	if err != nil {
-		writeTokenExchangeError(w, http.StatusBadRequest, "invalid_request", "malformed form body")
-		return
-	}
-
-	publicClientID := strings.TrimSpace(r.PathValue("clientId"))
-	if publicClientID == "" {
-		writeTokenExchangeError(w, http.StatusBadRequest, "invalid_request", "clientId is required")
-		return
-	}
-
-	clientID, clientSecret, _ := ClientCredentialsFromRequest(r, form)
-	req := tokenexchange.Request{
-		PublicClientID:     publicClientID,
-		ClientID:           clientID,
-		ClientSecret:       clientSecret,
-		GrantType:          form.Get("grant_type"),
-		SubjectToken:       form.Get("subject_token"),
-		SubjectTokenType:   form.Get("subject_token_type"),
-		RequestedTokenType: form.Get("requested_token_type"),
-		Resource:           form.Get("resource"),
-		Audiences:          form["audience"],
 	}
 
 	result, err := s.tokenExchange.Exchange(r.Context(), req, correlationID)

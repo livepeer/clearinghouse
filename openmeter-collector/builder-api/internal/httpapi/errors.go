@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -53,6 +54,32 @@ func writeTokenExchangeError(w http.ResponseWriter, status int, code, descriptio
 		Error:            code,
 		ErrorDescription: description,
 	})
+}
+
+func writeBearerUnauthorized(w http.ResponseWriter, code, description string) {
+	if code == "" {
+		code = "invalid_token"
+	}
+	// Keep error_description in the JSON body only. Interpolating it into
+	// WWW-Authenticate would need RFC 6750 quoted-string escaping.
+	w.Header().Set("WWW-Authenticate", `Bearer realm="usage", error="`+rfc6750Quoted(code)+`"`)
+	writeOAuthError(w, http.StatusUnauthorized, code, description, "")
+}
+
+func rfc6750Quoted(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch r {
+		case '"', '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\r', '\n':
+			continue
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func writeAPIError(w http.ResponseWriter, status int, message string) {
