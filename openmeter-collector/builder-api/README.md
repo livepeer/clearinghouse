@@ -10,7 +10,7 @@ Go HTTP service co-located in the `openmeter-collector` container. Provisions **
 
 Scalar docs: `GET /api/v1/docs` (spec at `/api/v1/openapi.json`).
 
-**Usage surface.** End users read their own usage with signer JWT Bearer auth against a single shared OpenMeter organization. See [docs/USAGE.md](docs/USAGE.md) for curl examples.
+**Usage surface.** End users read their own usage with signer JWT Bearer auth against a single shared OpenMeter organization. See [docs/USAGE.md](docs/USAGE.md) for curl examples. Dev Portal / Auth0 DCR / Kong OIDC edge: [docs/DEV-PORTAL.md](docs/DEV-PORTAL.md).
 
 ## Usage route
 

@@ -63,6 +63,12 @@ cd openmeter-collector/provision
 # Catalog + customer; --subscribe attaches the role-appropriate Starter plan.
 ./bootstrap.sh all demo-client demo-user "Demo User" --subscribe
 ./bootstrap.sh owner 2e51154b-d296-4015-990c-02d5f16ecf1e "App Owner" --subscribe
+
+# Dev Portal Auth0 DCR + publish (idempotent by name).
+# See openmeter-collector/builder-api/docs/DEV-PORTAL.md
+./bootstrap.sh auth0-dcr
+./bootstrap.sh portal-dcr
+./bootstrap.sh portal-publish
 ```
 
 Windows (PowerShell):

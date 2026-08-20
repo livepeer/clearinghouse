@@ -5,6 +5,9 @@ authentication.
 
 Interactive OpenAPI: `GET /api/v1/docs` (spec at `/api/v1/openapi.json`).
 
+Kong Dev Portal + Auth0 DCR edge: [DEV-PORTAL.md](DEV-PORTAL.md).
+`sk_*` is for `POST /api/v1/oidc/token` on Railway only — not Gateway, not usage.
+
 ---
 
 ## Endpoint

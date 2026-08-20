@@ -320,8 +320,13 @@ func (c *Client) ListCustomerKeysForClient(ctx context.Context, clientID string)
 
 func decodeCustomerList(body []byte) ([]Customer, error) {
 	var page customerPage
-	if err := json.Unmarshal(body, &page); err == nil && page.Data != nil {
-		return page.Data, nil
+	if err := json.Unmarshal(body, &page); err == nil {
+		if page.Items != nil {
+			return page.Items, nil
+		}
+		if page.Data != nil {
+			return page.Data, nil
+		}
 	}
 	var list []Customer
 	if err := json.Unmarshal(body, &list); err == nil {
