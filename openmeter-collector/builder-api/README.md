@@ -19,17 +19,19 @@ User-scoped usage route:
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/users/me/usage?from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
+| `GET` | `/api/v1/users/me/balance` | Bearer signer JWT | Live credit/entitlement balance for the authenticated user only |
 
 The server derives `clientId` + `externalUserId` from token claims and queries exactly one usage subject.
 
-### User self route
+### User self routes
 
-End users can read only their own usage with a signer JWT, without passing an
-app id in the path:
+End users can read only their own usage and live balance with a signer JWT,
+without passing an app id in the path:
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/users/me/usage?from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
+| `GET` | `/api/v1/users/me/balance` | Bearer signer JWT | Live credit/entitlement balance for the authenticated user only |
 
 Identity is derived from JWT claims (`app_client_id`, `external_user_id`) via
 the identity-webhook verifier.
