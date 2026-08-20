@@ -90,8 +90,8 @@ ensure_auth0_session
 # --- auth0 api helpers (Management API v2 passthrough; JSON body on stdout) ---
 urlencode()   { jq -rn --arg s "$1" '$s|@uri'; }
 aapi_get()    { "$AUTH0_BIN" api get    "$1"; }
-aapi_post()   { printf '%s' "$2" | "$AUTH0_BIN" api post  "$1"; }
-aapi_patch()  { printf '%s' "$2" | "$AUTH0_BIN" api patch "$1"; }
+aapi_post()   { "$AUTH0_BIN" api post  "$1" --data "$2"; }
+aapi_patch()  { "$AUTH0_BIN" api patch "$1" --data "$2"; }
 aapi_delete() { "$AUTH0_BIN" api delete "$1" --force >/dev/null 2>&1 || true; }
 
 # --- resource server (API) -------------------------------------------------

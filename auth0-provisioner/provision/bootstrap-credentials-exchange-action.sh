@@ -38,5 +38,5 @@ info "deploying action ..."
 "$AUTH0_BIN" actions deploy "$ACTION_ID" >/dev/null
 
 BIND_BODY="$(jq -nc --arg id "$ACTION_ID" '{bindings:[{ref:{type:"action_id",value:$id}}]}')"
-printf '%s' "$BIND_BODY" | "$AUTH0_BIN" api patch "actions/triggers/$TRIGGER/bindings" >/dev/null
+"$AUTH0_BIN" api patch "actions/triggers/$TRIGGER/bindings" --data "$BIND_BODY" >/dev/null
 info "bound action to $TRIGGER trigger"
