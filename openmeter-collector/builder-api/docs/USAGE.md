@@ -13,11 +13,12 @@ Interactive OpenAPI: `GET /api/v1/docs` (spec at `/api/v1/openapi.json`).
 
 Identity is derived from JWT claims (`app_client_id`, `external_user_id`) via
 identity-webhook verification. The server always queries exactly one usage
-subject: `{clientId}:{externalUserId}`.
+subject: `{clientId}:{externalUserId}` and one meter slug from deployment
+config (`OPENMETER_USAGE_METER_KEY`, or derived from `OPENMETER_TRIAL_FEATURE_KEY`
+via the provisioned catalog).
 
 | Query | Required | Notes |
 | --- | --- | --- |
-| `meter` | yes | Catalog meter key |
 | `from` / `to` | no | RFC3339 window |
 | `groupBy` | no | Additional group-by dimensions |
 
@@ -27,7 +28,7 @@ export SIGNER_JWT=eyJ...
 
 curl -sS \
   -H "Authorization: Bearer $SIGNER_JWT" \
-  "$BUILDER_API/api/v1/users/me/usage?meter=billable_usd_micros" | jq .
+  "$BUILDER_API/api/v1/users/me/usage" | jq .
 ```
 
 Example shape:
@@ -36,7 +37,7 @@ Example shape:
 {
   "clientId": "xEJfZBtEP0JLJtlXm9UnJrDrA9bwepLx",
   "externalUserId": "demo-user",
-  "meter": "billable_usd_micros",
+  "meter": "network_fee_usd_micros",
   "subject": "xEJfZBtEP0JLJtlXm9UnJrDrA9bwepLx:demo-user",
   "rows": []
 }
@@ -81,7 +82,7 @@ curl -sS \
 
 | Code | Meaning |
 | --- | --- |
-| `400` | Invalid query params (`meter`, window) |
+| `400` | Invalid query params (time window) |
 | `401` | Missing/invalid Bearer token (usage) or invalid client/token (exchange) |
 | `402` | `insufficient_allowance` on token exchange when allowance enforcement is enabled |
 | `502` | OpenMeter query failure |

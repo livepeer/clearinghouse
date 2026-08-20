@@ -186,21 +186,13 @@
     "/api/v1/users/me/usage": {
       "get": {
         "summary": "Query metered usage for the authenticated user",
-        "description": "User-scoped usage route. Identity is derived from the Bearer signer JWT; the app client id is inferred from token claims.",
+        "description": "User-scoped usage route. Identity is derived from the Bearer signer JWT; the app client id is inferred from token claims. The meter slug is fixed by deployment config (OPENMETER_USAGE_METER_KEY or OPENMETER_TRIAL_FEATURE_KEY).",
         "security": [
           {
             "signerBearer": []
           }
         ],
         "parameters": [
-          {
-            "name": "meter",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "name": "from",
             "in": "query",
@@ -233,7 +225,7 @@
             "description": "Usage rows scoped to the authenticated user"
           },
           "400": {
-            "description": "Invalid meter or time window"
+            "description": "Invalid time window"
           },
           "401": {
             "description": "Missing or invalid bearer token"

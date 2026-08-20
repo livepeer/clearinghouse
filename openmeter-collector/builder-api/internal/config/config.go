@@ -22,6 +22,7 @@ type Config struct {
 	OpenMeterAPIKey              string
 	OpenMeterDefaultPlanKey      string
 	OpenMeterTrialFeatureKey     string
+	OpenMeterUsageMeterKey       string
 	OpenMeterTrialGrantUSDMicros int64
 	OpenMeterEnforceAllowance    bool
 	SignerURL                    string
@@ -50,7 +51,8 @@ func Load() (Config, error) {
 		OpenMeterURL:              envOr("OPENMETER_URL", "https://us.api.konghq.com/v3/openmeter"),
 		OpenMeterAPIKey:           strings.TrimSpace(os.Getenv("OPENMETER_API_KEY")),
 		OpenMeterDefaultPlanKey:   envOr("OPENMETER_DEFAULT_PLAN_KEY", "clearinghouse_default_ppu"),
-		OpenMeterTrialFeatureKey:  envOr("OPENMETER_TRIAL_FEATURE_KEY", "billable_spend"),
+		OpenMeterTrialFeatureKey:  envOr("OPENMETER_TRIAL_FEATURE_KEY", "network_spend"),
+		OpenMeterUsageMeterKey:    strings.TrimSpace(os.Getenv("OPENMETER_USAGE_METER_KEY")),
 		OpenMeterEnforceAllowance: envBool("OPENMETER_ENFORCE_ALLOWANCE", true),
 		SignerURL:                 strings.TrimSpace(os.Getenv("SIGNER_URL")),
 		DiscoveryURL: envOr(
@@ -107,6 +109,21 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// UsageMeterKey returns the OpenMeter meter slug for user usage queries.
+// OPENMETER_USAGE_METER_KEY wins when set; otherwise the slug is derived from
+// OPENMETER_TRIAL_FEATURE_KEY using the feature→meter mapping in catalog.json.
+func (c Config) UsageMeterKey() string {
+	if v := strings.TrimSpace(c.OpenMeterUsageMeterKey); v != "" {
+		return v
+	}
+	switch strings.TrimSpace(c.OpenMeterTrialFeatureKey) {
+	case "billable_spend":
+		return "billable_usd_micros"
+	default:
+		return "network_fee_usd_micros"
+	}
 }
 
 func envOr(key, fallback string) string {

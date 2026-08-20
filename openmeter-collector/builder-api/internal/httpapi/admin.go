@@ -63,11 +63,7 @@ func (s *Server) handleUsageSelf(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	meter := strings.TrimSpace(r.URL.Query().Get("meter"))
-	if meter == "" {
-		writeAPIError(w, http.StatusBadRequest, "meter is required")
-		return
-	}
+	meter := s.cfg.UsageMeterKey()
 	from, to, err := parseWindow(r)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())

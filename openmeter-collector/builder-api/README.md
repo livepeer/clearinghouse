@@ -18,7 +18,7 @@ User-scoped usage route:
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/users/me/usage?meter=&from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
+| `GET` | `/api/v1/users/me/usage?from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
 
 The server derives `clientId` + `externalUserId` from token claims and queries exactly one usage subject.
 
@@ -29,7 +29,7 @@ app id in the path:
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/users/me/usage?meter=&from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
+| `GET` | `/api/v1/users/me/usage?from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
 
 Identity is derived from JWT claims (`app_client_id`, `external_user_id`) via
 the identity-webhook verifier.
@@ -283,7 +283,8 @@ Plans and rate cards are still provisioned out of band by
 | --- | --- |
 | `OPENMETER_URL` / `OPENMETER_API_KEY` | Shared Kong OpenMeter organization (required) |
 | `OPENMETER_DEFAULT_PLAN_KEY` | Default `clearinghouse_default_ppu` |
-| `OPENMETER_TRIAL_FEATURE_KEY` | Default `billable_spend` |
+| `OPENMETER_TRIAL_FEATURE_KEY` | Default `network_spend` (maps to usage meter via catalog) |
+| `OPENMETER_USAGE_METER_KEY` | Optional override for usage queries (default derived from trial feature) |
 | `OPENMETER_TRIAL_GRANT_USD_MICROS` | `0` disables auto trial grant |
 | `OPENMETER_ENFORCE_ALLOWANCE` | Default `true` |
 

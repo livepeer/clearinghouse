@@ -49,8 +49,9 @@ func (f fakeUsageVerifier) VerifyUserAccessToken(context.Context, string, string
 
 func newServer(usageReader httpapi.UsageReader, verifier tokenexchange.UserTokenVerifier) http.Handler {
 	cfg := config.Config{
-		SignerM2MClientID: platformID,
-		SignerM2MSecret:   platformSecret,
+		SignerM2MClientID:      platformID,
+		SignerM2MSecret:        platformSecret,
+		OpenMeterUsageMeterKey: "billable_usd_micros",
 	}
 	return httpapi.NewServer(cfg, nil, nil, nil, nil, verifier, nil, usageReader).Handler()
 }
@@ -80,7 +81,7 @@ func doBasic(t *testing.T, h http.Handler, method, target, user, pass string) *h
 
 func TestDeprecatedAppUsageRouteNotFound(t *testing.T) {
 	h := newServer(&fakeUsageReader{}, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
-	rec := doBearer(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=billable_usd_micros", "jwt")
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage", "jwt")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404", rec.Code)
 	}
@@ -104,7 +105,7 @@ func TestDeprecatedRotateAPIKeyRouteNotFound(t *testing.T) {
 
 func TestUsageSelfRequiresBearer(t *testing.T) {
 	h := newServer(&fakeUsageReader{}, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
-	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/usage?meter=billable_usd_micros", "")
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/usage", "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d, want 401", rec.Code)
 	}
@@ -122,9 +123,12 @@ func TestUsageSelfReturnsCallerOnly(t *testing.T) {
 		},
 	}
 	h := newServer(usageReader, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
-	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/usage?meter=billable_usd_micros", "header.payload.signature")
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/usage", "header.payload.signature")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	if usageReader.lastQuery.MeterSlug != "billable_usd_micros" {
+		t.Fatalf("meter slug = %q, want billable_usd_micros", usageReader.lastQuery.MeterSlug)
 	}
 	if len(usageReader.lastQuery.Subjects) != 1 || usageReader.lastQuery.Subjects[0] != "tenant-a:alice" {
 		t.Fatalf("query subjects = %v, want [tenant-a:alice]", usageReader.lastQuery.Subjects)
@@ -146,7 +150,7 @@ func TestUsageSelfReturnsCallerOnly(t *testing.T) {
 
 func TestUsageSelfRejectsInvalidVerifierResult(t *testing.T) {
 	h := newServer(&fakeUsageReader{}, fakeUsageVerifier{err: errors.New("invalid token")})
-	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/usage?meter=billable_usd_micros", "bad-token")
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/usage", "bad-token")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d, want 401", rec.Code)
 	}
