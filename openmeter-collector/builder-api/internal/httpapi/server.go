@@ -11,7 +11,6 @@ import (
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/auth0mint"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/config"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/openmeter"
-	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/tenantauth"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/tokenexchange"
 )
 
@@ -24,8 +23,7 @@ type Server struct {
 	tokenExchange *tokenexchange.Handler
 	userVerifier  tokenexchange.UserTokenVerifier
 	openAPISpec   []byte
-	tenantAuth    *tenantauth.Authenticator
-	admin         OpenMeterAdmin
+	usageReader   UsageReader
 }
 
 type openmeterSession interface {
@@ -41,8 +39,7 @@ func NewServer(
 	tokenExchange *tokenexchange.Handler,
 	userVerifier tokenexchange.UserTokenVerifier,
 	openAPISpec []byte,
-	tenantAuth *tenantauth.Authenticator,
-	admin OpenMeterAdmin,
+	usageReader UsageReader,
 ) *Server {
 	return &Server{
 		cfg:           cfg,
@@ -52,8 +49,7 @@ func NewServer(
 		tokenExchange: tokenExchange,
 		userVerifier:  userVerifier,
 		openAPISpec:   openAPISpec,
-		tenantAuth:    tenantAuth,
-		admin:         admin,
+		usageReader:   usageReader,
 	}
 }
 
@@ -63,12 +59,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("GET /api/v1/docs", s.handleDocs)
 	mux.HandleFunc("POST /api/v1/apps/{clientId}/users", s.handleCreateUser)
-	mux.HandleFunc("POST /api/v1/apps/{clientId}/oidc/token", s.handleOIDCToken)
 	mux.HandleFunc("POST /api/v1/oidc/token", s.handleOIDCToken)
-	mux.HandleFunc("GET /api/v1/apps/{clientId}/usage", s.handleUsage)
 	mux.HandleFunc("GET /api/v1/users/me/usage", s.handleUsageSelf)
-	mux.HandleFunc("GET /api/v1/apps/{clientId}/users/{externalUserId}/access", s.handleUserAccess)
-	mux.HandleFunc("POST /api/v1/apps/{clientId}/users/{externalUserId}/grants", s.handleGrantAllowance)
 	return mux
 }
 
@@ -118,8 +110,13 @@ type createUserResponse struct {
 }
 
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
-	clientID, ok := s.authorizeTenant(w, r)
-	if !ok {
+	clientID := strings.TrimSpace(r.PathValue("clientId"))
+	if clientID == "" {
+		writeAPIError(w, http.StatusBadRequest, "clientId is required")
+		return
+	}
+	if !M2MAuth(r, s.cfg.SignerM2MClientID, s.cfg.SignerM2MSecret) {
+		writeAPIError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 

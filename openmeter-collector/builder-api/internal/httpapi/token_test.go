@@ -65,10 +65,10 @@ func TestHandleOIDCTokenRejectsUnsupportedGrantType(t *testing.T) {
 		stubMinter{},
 		stubProvisioner{},
 	)
-	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil, nil)
+	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil)
 
 	body := "grant_type=client_credentials&subject_token=sk_demo&subject_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps/pub-client/oidc/token", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/oidc/token", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 
@@ -106,7 +106,7 @@ func TestHandleOIDCTokenAPIKeyExchange(t *testing.T) {
 		stubMinter{},
 		stubProvisioner{},
 	)
-	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil, nil)
+	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil)
 
 	body := strings.Join([]string{
 		"grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange",
@@ -114,7 +114,7 @@ func TestHandleOIDCTokenAPIKeyExchange(t *testing.T) {
 		"subject_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
 		"audience=livepeer-clearinghouse",
 	}, "&")
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps/pub-client/oidc/token", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/oidc/token", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 
@@ -152,7 +152,7 @@ func TestHandleOIDCTokenAPIKeyExchangeWithoutClientPath(t *testing.T) {
 		stubMinter{},
 		stubProvisioner{},
 	)
-	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil, nil)
+	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil)
 
 	body := strings.Join([]string{
 		"grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange",

@@ -16,7 +16,6 @@ import (
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/config"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/httpapi"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/openmeter"
-	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/tenantauth"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/tokenexchange"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/webhookverify"
 )
@@ -61,26 +60,16 @@ func main() {
 	}
 	tokenHandler := tokenexchange.NewHandler(cfg, verifier, keyStore, minter, session)
 
-	tenantSecrets, err := tenantauth.ParseTenantSecrets(cfg.TenantAdminKeys)
-	if err != nil {
-		log.Fatalf("tenant admin keys: %v", err)
-	}
-	if len(tenantSecrets) == 0 {
-		log.Printf("no TENANT_ADMIN_KEYS configured; admin routes accept the platform M2M credential only")
-	}
-	tenantAuth := tenantauth.New(cfg.SignerM2MClientID, cfg.SignerM2MSecret, tenantSecrets)
-
-	// Admin routes read the shared OpenMeter tenant with one platform
-	// credential and enforce the per-tenant boundary themselves. Left nil when
-	// unconfigured so the routes answer 503 instead of panicking.
-	var adminAPI httpapi.OpenMeterAdmin
+	// Usage routes read the shared OpenMeter tenant using user-scoped Bearer
+	// credentials. Left nil when unconfigured so the route answers 503.
+	var usageReader httpapi.UsageReader
 	if cfg.OpenMeterURL != "" && cfg.OpenMeterAPIKey != "" {
-		adminAPI = openmeter.New(cfg.OpenMeterURL, cfg.OpenMeterAPIKey)
+		usageReader = openmeter.New(cfg.OpenMeterURL, cfg.OpenMeterAPIKey)
 	} else {
-		log.Printf("OPENMETER_URL/OPENMETER_API_KEY unset; admin usage routes disabled")
+		log.Printf("OPENMETER_URL/OPENMETER_API_KEY unset; usage routes disabled")
 	}
 
-	srv := httpapi.NewServer(cfg, auth0Client, minter, session, tokenHandler, verifier, openAPISpec, tenantAuth, adminAPI)
+	srv := httpapi.NewServer(cfg, auth0Client, minter, session, tokenHandler, verifier, openAPISpec, usageReader)
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Handler(),

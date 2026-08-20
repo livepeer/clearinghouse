@@ -152,5 +152,5 @@ jq -n \
 info "wrote $ENV_FILE"
 info "wrote $SDK_CONFIG"
 info ""
-info "next: set OPENMETER_URL + OPENMETER_API_KEY and TENANT_ADMIN_KEYS for the"
-info "      admin API — see openmeter-collector/builder-api/docs/TENANT-ISOLATION.md"
+info "next: set OPENMETER_URL + OPENMETER_API_KEY and configure"
+info "      REMOTE_SIGNER_WEBHOOK_URL + WEBHOOK_SECRET for usage JWT verification"

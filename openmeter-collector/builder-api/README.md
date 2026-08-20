@@ -10,30 +10,17 @@ Go HTTP service co-located in the `openmeter-collector` container. Provisions **
 
 Scalar docs: `GET /api/v1/docs` (spec at `/api/v1/openapi.json`).
 
-**Admin surface.** Usage queries and allowance/entitlement operations are exposed here, scoped per tenant against a single shared OpenMeter organization. See [docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md) for the boundary model and [docs/USAGE.md](docs/USAGE.md) for integrator curl examples against the live API.
+**Usage surface.** End users read their own usage with signer JWT Bearer auth against a single shared OpenMeter organization. See [docs/USAGE.md](docs/USAGE.md) for curl examples.
 
-## Admin routes
+## Usage route
 
-Tenant-scoped. Authenticate with HTTP Basic as either the platform M2M
-credential (any tenant) or a tenant's own `clientId` + secret from
-`TENANT_ADMIN_KEYS` (that tenant only). A request for someone else's app
-answers `404`, not `403`.
+User-scoped usage route:
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/v1/apps/{clientId}/usage?meter=&from=&to=[&externalUserId=][&groupBy=]` | Metered usage, scoped to the app |
-| `GET` | `/api/v1/apps/{clientId}/users/{externalUserId}/access[?feature=]` | Allowance / entitlement balance |
-| `POST` | `/api/v1/apps/{clientId}/users/{externalUserId}/grants` | Grant allowance (`amountUsdMicros`, optional `featureKey`, `grantKey`) |
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/users/me/usage?meter=&from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
 
-```bash
-curl -u "app_abc123:$TENANT_SECRET" \
-  "$BUILDER_API/api/v1/apps/app_abc123/usage?meter=billable_usd_micros"
-```
-
-Subjects are derived from the **authorized** client id, never from caller
-input, and `externalUserId` may not contain `:`. The full model, threat
-boundary, and operator prerequisites are in
-[docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md).
+The server derives `clientId` + `externalUserId` from token claims and queries exactly one usage subject.
 
 ### User self route
 
@@ -74,7 +61,6 @@ parked. Builder-api talks only to the shared org.
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/apps/{clientId}/users` | M2M Basic | Create/upsert Auth0 user + OpenMeter customer; returns `apiKey` once |
 | `POST` | `/api/v1/oidc/token` | RFC 8693 form + subject token | Exchange Auth0 user JWT or `sk_*` API key for signer JWT; client inferred from token |
-| `POST` | `/api/v1/apps/{clientId}/oidc/token` | RFC 8693 form + subject token | Backward-compatible app-scoped exchange endpoint |
 
 ## Auth0 prerequisites
 
@@ -230,8 +216,8 @@ Customers are upserted with:
 This matches the collector CloudEvent `subject` / `auth_id` contract.
 
 Plans and rate cards are still provisioned out of band by
-`openmeter-collector/provision/bootstrap.sh`. Usage and allowance reads go
-through the admin routes above.
+`openmeter-collector/provision/bootstrap.sh`. Usage reads go through
+`GET /api/v1/users/me/usage`.
 
 ## Env (metering)
 
