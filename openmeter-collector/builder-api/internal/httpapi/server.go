@@ -22,6 +22,7 @@ type Server struct {
 	minter        *auth0mint.Minter
 	openmeter     openmeterSession
 	tokenExchange *tokenexchange.Handler
+	userVerifier  tokenexchange.UserTokenVerifier
 	openAPISpec   []byte
 	tenantAuth    *tenantauth.Authenticator
 	admin         OpenMeterAdmin
@@ -32,13 +33,24 @@ type openmeterSession interface {
 }
 
 // NewServer constructs the HTTP API server.
-func NewServer(cfg config.Config, auth0 *auth0mgmt.Client, minter *auth0mint.Minter, om openmeterSession, tokenExchange *tokenexchange.Handler, openAPISpec []byte, tenantAuth *tenantauth.Authenticator, admin OpenMeterAdmin) *Server {
+func NewServer(
+	cfg config.Config,
+	auth0 *auth0mgmt.Client,
+	minter *auth0mint.Minter,
+	om openmeterSession,
+	tokenExchange *tokenexchange.Handler,
+	userVerifier tokenexchange.UserTokenVerifier,
+	openAPISpec []byte,
+	tenantAuth *tenantauth.Authenticator,
+	admin OpenMeterAdmin,
+) *Server {
 	return &Server{
 		cfg:           cfg,
 		auth0:         auth0,
 		minter:        minter,
 		openmeter:     om,
 		tokenExchange: tokenExchange,
+		userVerifier:  userVerifier,
 		openAPISpec:   openAPISpec,
 		tenantAuth:    tenantAuth,
 		admin:         admin,
@@ -52,7 +64,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/docs", s.handleDocs)
 	mux.HandleFunc("POST /api/v1/apps/{clientId}/users", s.handleCreateUser)
 	mux.HandleFunc("POST /api/v1/apps/{clientId}/oidc/token", s.handleOIDCToken)
+	mux.HandleFunc("POST /api/v1/oidc/token", s.handleOIDCToken)
 	mux.HandleFunc("GET /api/v1/apps/{clientId}/usage", s.handleUsage)
+	mux.HandleFunc("GET /api/v1/users/me/usage", s.handleUsageSelf)
 	mux.HandleFunc("GET /api/v1/apps/{clientId}/users/{externalUserId}/access", s.handleUserAccess)
 	mux.HandleFunc("POST /api/v1/apps/{clientId}/users/{externalUserId}/grants", s.handleGrantAllowance)
 	return mux

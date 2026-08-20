@@ -97,6 +97,14 @@ type usageResponse struct {
 	Rows     []openmeter.UsageRow `json:"rows"`
 }
 
+type selfUsageResponse struct {
+	ClientID       string               `json:"clientId"`
+	ExternalUserID string               `json:"externalUserId"`
+	Meter          string               `json:"meter"`
+	Subject        string               `json:"subject"`
+	Rows           []openmeter.UsageRow `json:"rows"`
+}
+
 // handleUsage serves GET /api/v1/apps/{clientId}/usage.
 //
 // Without externalUserId it reports every customer belonging to the tenant;
@@ -170,6 +178,77 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// authorizeUsageIdentity verifies a caller's Bearer JWT and returns the
+// trusted client and external user ids from the identity-webhook contract.
+func (s *Server) authorizeUsageIdentity(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+	if s.userVerifier == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "JWT verification is not configured")
+		return "", "", false
+	}
+	token := BearerToken(r)
+	if token == "" {
+		writeBearerUnauthorized(w, "invalid_token", "missing bearer token")
+		return "", "", false
+	}
+	clientID, externalUserID, err := s.userVerifier.VerifyUserAccessToken(r.Context(), token, "")
+	if err != nil {
+		writeBearerUnauthorized(w, "invalid_token", "invalid bearer token")
+		return "", "", false
+	}
+	clientID = strings.TrimSpace(clientID)
+	externalUserID = strings.TrimSpace(externalUserID)
+	if clientID == "" || externalUserID == "" || strings.Contains(externalUserID, ":") {
+		writeBearerUnauthorized(w, "invalid_token", "invalid bearer token")
+		return "", "", false
+	}
+	return clientID, externalUserID, true
+}
+
+// handleUsageSelf serves GET /api/v1/users/me/usage.
+//
+// This user-scoped route derives tenant and user identity from the Bearer
+// signer JWT, so end users do not need a clientId path segment.
+func (s *Server) handleUsageSelf(w http.ResponseWriter, r *http.Request) {
+	if s.admin == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "metering backend is not configured")
+		return
+	}
+	clientID, externalUserID, ok := s.authorizeUsageIdentity(w, r)
+	if !ok {
+		return
+	}
+	meter := strings.TrimSpace(r.URL.Query().Get("meter"))
+	if meter == "" {
+		writeAPIError(w, http.StatusBadRequest, "meter is required")
+		return
+	}
+	from, to, err := parseWindow(r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	subject := openmeter.CustomerKey(clientID, externalUserID)
+	rows, err := s.admin.QueryUsage(r.Context(), openmeter.UsageQuery{
+		MeterSlug: meter,
+		Subjects:  []string{subject},
+		From:      from,
+		To:        to,
+		GroupBy:   r.URL.Query()["groupBy"],
+	})
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "usage query failed")
+		return
+	}
+	rows = filterRowsToSubject(rows, subject)
+	writeJSON(w, http.StatusOK, selfUsageResponse{
+		ClientID:       clientID,
+		ExternalUserID: externalUserID,
+		Meter:          meter,
+		Subject:        subject,
+		Rows:           rows,
+	})
+}
+
 // filterRowsToTenant drops any row whose subject is outside the tenant. The
 // query is already scoped; this guards against a backend that ignores the
 // subject filter and returns the whole meter.
@@ -182,6 +261,16 @@ func filterRowsToTenant(rows []openmeter.UsageRow, clientID string) []openmeter.
 	out := make([]openmeter.UsageRow, 0, len(rows))
 	for _, row := range rows {
 		if strings.HasPrefix(row.Subject, prefix) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func filterRowsToSubject(rows []openmeter.UsageRow, subject string) []openmeter.UsageRow {
+	out := make([]openmeter.UsageRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Subject == subject {
 			out = append(out, row)
 		}
 	}

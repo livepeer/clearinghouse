@@ -55,6 +55,17 @@ func writeTokenExchangeError(w http.ResponseWriter, status int, code, descriptio
 	})
 }
 
+func writeBearerUnauthorized(w http.ResponseWriter, code, description string) {
+	if code == "" {
+		code = "invalid_token"
+	}
+	w.Header().Set(
+		"WWW-Authenticate",
+		`Bearer realm="usage", error="`+code+`", error_description="`+description+`"`,
+	)
+	writeOAuthError(w, http.StatusUnauthorized, code, description, "")
+}
+
 func writeAPIError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

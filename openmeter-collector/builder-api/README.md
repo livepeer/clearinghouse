@@ -35,6 +35,18 @@ input, and `externalUserId` may not contain `:`. The full model, threat
 boundary, and operator prerequisites are in
 [docs/TENANT-ISOLATION.md](docs/TENANT-ISOLATION.md).
 
+### User self route
+
+End users can read only their own usage with a signer JWT, without passing an
+app id in the path:
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/users/me/usage?meter=&from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
+
+Identity is derived from JWT claims (`app_client_id`, `external_user_id`) via
+the identity-webhook verifier.
+
 ## Token exchange flow
 
 ```text
@@ -61,7 +73,8 @@ parked. Builder-api talks only to the shared org.
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/apps/{clientId}/users` | M2M Basic | Create/upsert Auth0 user + OpenMeter customer; returns `apiKey` once |
-| `POST` | `/api/v1/apps/{clientId}/oidc/token` | RFC 8693 form + subject token | Exchange Auth0 user JWT or `sk_*` API key for signer JWT; 402 if allowance exhausted |
+| `POST` | `/api/v1/oidc/token` | RFC 8693 form + subject token | Exchange Auth0 user JWT or `sk_*` API key for signer JWT; client inferred from token |
+| `POST` | `/api/v1/apps/{clientId}/oidc/token` | RFC 8693 form + subject token | Backward-compatible app-scoped exchange endpoint |
 
 ## Auth0 prerequisites
 
@@ -145,21 +158,21 @@ Use the public client id from `.env.livepeer` as the `{clientId}` path segment (
 
 ## Example: RFC 8693 signer session exchange
 
-Signer-session issuance uses **RFC 8693** at `POST /api/v1/apps/{clientId}/oidc/token` with `application/x-www-form-urlencoded` body fields:
+Signer-session issuance uses **RFC 8693** at `POST /api/v1/oidc/token` with `application/x-www-form-urlencoded` body fields:
 
-- `{clientId}` — public Auth0 client id for the integrator app (same path segment as `/users`)
 - `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`
 - `subject_token` — Auth0 user access token (device code) **or** end-user API key (`sk_*`)
 - `subject_token_type=urn:ietf:params:oauth:token-type:access_token`
 - `audience=livepeer-clearinghouse` (or omit; must match configured audience when provided)
 
-The subject token must belong to the public client named in the path (`azp` for JWTs, or API key issued for that client). Optional HTTP Basic auth with the signer M2M client is supported for server-side callers.
+The subject token determines the target app (`azp`/`app_client_id` for JWTs, or
+API key ownership for `sk_*`). Optional HTTP Basic auth with the signer M2M
+client is supported for server-side callers.
 
 API key:
 
 ```bash
 set -a; source openmeter-collector/.env; set +a
-PUBLIC_CLIENT_ID="$DEMO_APP_AUTH0_PUBLIC_CLIENT_ID"
 API_KEY=sk_...
 curl -sS \
   -H "Content-Type: application/x-www-form-urlencoded" \
@@ -168,13 +181,12 @@ curl -sS \
   --data-urlencode "subject_token_type=urn:ietf:params:oauth:token-type:access_token" \
   --data-urlencode "requested_token_type=urn:ietf:params:oauth:token-type:access_token" \
   --data-urlencode "audience=livepeer-clearinghouse" \
-  "http://localhost:8095/api/v1/apps/${PUBLIC_CLIENT_ID}/oidc/token"
+  "http://localhost:8095/api/v1/oidc/token"
 ```
 
 Device code (user JWT as `subject_token`):
 
 ```bash
-PUBLIC_CLIENT_ID="$DEMO_APP_AUTH0_PUBLIC_CLIENT_ID"
 OIDC_TOKEN=...   # access_token from device code flow
 curl -sS \
   -H "Content-Type: application/x-www-form-urlencoded" \
@@ -183,7 +195,7 @@ curl -sS \
   --data-urlencode "subject_token_type=urn:ietf:params:oauth:token-type:access_token" \
   --data-urlencode "requested_token_type=urn:ietf:params:oauth:token-type:access_token" \
   --data-urlencode "audience=livepeer-clearinghouse" \
-  "http://localhost:8095/api/v1/apps/${PUBLIC_CLIENT_ID}/oidc/token"
+  "http://localhost:8095/api/v1/oidc/token"
 ```
 
 The OpenMeter customer key is `{clientId}:{sub}` (e.g. `pub:google-oauth2|…`), matching the CloudEvent `subject`.

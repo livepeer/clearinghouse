@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/httpapi"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/openmeter"
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/tenantauth"
+	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/tokenexchange"
 )
 
 // fakeAdmin records the subjects it was asked for so tests can assert that a
@@ -71,12 +73,25 @@ func (f *fakeAdmin) EnsureTrialGrant(_ context.Context, customerID, _, _ string,
 	return nil
 }
 
+type fakeUsageVerifier struct {
+	clientID       string
+	externalUserID string
+	err            error
+}
+
+func (f fakeUsageVerifier) VerifyUserAccessToken(context.Context, string, string) (string, string, error) {
+	if f.err != nil {
+		return "", "", f.err
+	}
+	return f.clientID, f.externalUserID, nil
+}
+
 const (
 	platformID     = "platform-m2m"
 	platformSecret = "platform-secret"
 )
 
-func newBoundaryServer(admin httpapi.OpenMeterAdmin) http.Handler {
+func newBoundaryServer(admin httpapi.OpenMeterAdmin, verifier tokenexchange.UserTokenVerifier) http.Handler {
 	cfg := config.Config{
 		SignerM2MClientID:        platformID,
 		SignerM2MSecret:          platformSecret,
@@ -86,7 +101,7 @@ func newBoundaryServer(admin httpapi.OpenMeterAdmin) http.Handler {
 		"tenant-a": "secret-a",
 		"tenant-b": "secret-b",
 	})
-	return httpapi.NewServer(cfg, nil, nil, nil, nil, nil, auth, admin).Handler()
+	return httpapi.NewServer(cfg, nil, nil, nil, nil, verifier, nil, auth, admin).Handler()
 }
 
 func do(t *testing.T, h http.Handler, method, target, user, pass string) *httptest.ResponseRecorder {
@@ -95,6 +110,17 @@ func do(t *testing.T, h http.Handler, method, target, user, pass string) *httpte
 	req.Header.Set("Content-Type", "application/json")
 	if user != "" || pass != "" {
 		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(user+":"+pass)))
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func doBearer(t *testing.T, h http.Handler, method, target, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, target, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -114,7 +140,7 @@ func adminRoutes(clientID string) []struct{ method, path string } {
 
 func TestCrossTenantAccessIsRefusedOnEveryRoute(t *testing.T) {
 	admin := &fakeAdmin{keys: map[string][]string{"tenant-b": {"tenant-b:victim"}}}
-	h := newBoundaryServer(admin)
+	h := newBoundaryServer(admin, nil)
 
 	for _, rt := range adminRoutes("tenant-b") {
 		// tenant-a authenticates correctly, then asks for tenant-b.
@@ -133,7 +159,7 @@ func TestCrossTenantAccessIsRefusedOnEveryRoute(t *testing.T) {
 
 func TestUnauthenticatedAndBadCredentialsAreRefused(t *testing.T) {
 	admin := &fakeAdmin{}
-	h := newBoundaryServer(admin)
+	h := newBoundaryServer(admin, nil)
 
 	for _, rt := range adminRoutes("tenant-a") {
 		for _, c := range []struct{ name, user, pass string }{
@@ -157,7 +183,7 @@ func TestTenantReachesOnlyItsOwnSubjects(t *testing.T) {
 		"tenant-a": {"tenant-a:alice", "tenant-a:bob"},
 		"tenant-b": {"tenant-b:victim"},
 	}}
-	h := newBoundaryServer(admin)
+	h := newBoundaryServer(admin, nil)
 
 	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=billable_usd_micros", "tenant-a", "secret-a")
 	if rec.Code != http.StatusOK {
@@ -175,7 +201,7 @@ func TestTenantReachesOnlyItsOwnSubjects(t *testing.T) {
 
 func TestPlatformAdminMayReachAnyTenant(t *testing.T) {
 	admin := &fakeAdmin{keys: map[string][]string{"tenant-b": {"tenant-b:victim"}}}
-	h := newBoundaryServer(admin)
+	h := newBoundaryServer(admin, nil)
 
 	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-b/usage?meter=m", platformID, platformSecret)
 	if rec.Code != http.StatusOK {
@@ -188,7 +214,7 @@ func TestPlatformAdminMayReachAnyTenant(t *testing.T) {
 // about where the tenant ends.
 func TestSubjectCannotBeSmuggledViaUserID(t *testing.T) {
 	admin := &fakeAdmin{}
-	h := newBoundaryServer(admin)
+	h := newBoundaryServer(admin, nil)
 
 	hostile := []string{
 		"tenant-b:victim",
@@ -222,7 +248,7 @@ func TestAccessAndGrantResolveCustomerID(t *testing.T) {
 			"tenant-a:alice": {ID: "01ALICEULID00000000000001", Key: "tenant-a:alice"},
 		},
 	}
-	h := newBoundaryServer(admin)
+	h := newBoundaryServer(admin, nil)
 
 	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/users/alice/access", "tenant-a", "secret-a")
 	if rec.Code != http.StatusOK {
@@ -246,7 +272,7 @@ func TestAccessAndGrantResolveCustomerID(t *testing.T) {
 
 func TestAccessMissingCustomerIs404(t *testing.T) {
 	admin := &fakeAdmin{customers: map[string]*openmeter.Customer{}}
-	h := newBoundaryServer(admin)
+	h := newBoundaryServer(admin, nil)
 	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/users/nobody/access", "tenant-a", "secret-a")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404", rec.Code)
@@ -269,7 +295,7 @@ func TestForeignRowsAreFilteredOut(t *testing.T) {
 			{Subject: "", Value: 12345},
 		},
 	}
-	h := newBoundaryServer(admin)
+	h := newBoundaryServer(admin, nil)
 
 	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a/usage?meter=m", "tenant-a", "secret-a")
 	if rec.Code != http.StatusOK {
@@ -290,7 +316,7 @@ func TestForeignRowsAreFilteredOut(t *testing.T) {
 // matching customer keys belonging to "tenant-a-corp".
 func TestPrefixIsMatchedOnTheSeparator(t *testing.T) {
 	admin := &fakeAdmin{}
-	h := newBoundaryServer(admin)
+	h := newBoundaryServer(admin, nil)
 
 	rec := do(t, h, http.MethodGet, "/api/v1/apps/tenant-a-corp/usage?meter=m", "tenant-a", "secret-a")
 	if rec.Code != http.StatusNotFound {
@@ -298,9 +324,62 @@ func TestPrefixIsMatchedOnTheSeparator(t *testing.T) {
 	}
 }
 
+func TestUsageSelfRequiresBearer(t *testing.T) {
+	h := newBoundaryServer(&fakeAdmin{}, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
+
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/usage?meter=billable_usd_micros", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", rec.Code)
+	}
+	if !strings.Contains(rec.Header().Get("WWW-Authenticate"), "Bearer") {
+		t.Fatalf("expected WWW-Authenticate Bearer, got %q", rec.Header().Get("WWW-Authenticate"))
+	}
+}
+
+func TestUsageSelfReturnsCallerOnly(t *testing.T) {
+	admin := &fakeAdmin{
+		rows: []openmeter.UsageRow{
+			{Subject: "tenant-a:alice", Value: 1},
+			{Subject: "tenant-a:bob", Value: 99},
+			{Subject: "tenant-b:victim", Value: 123},
+		},
+	}
+	h := newBoundaryServer(admin, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
+
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/usage?meter=billable_usd_micros", "header.payload.signature")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(admin.lastQuery.Subjects) != 1 || admin.lastQuery.Subjects[0] != "tenant-a:alice" {
+		t.Fatalf("query subjects = %v, want [tenant-a:alice]", admin.lastQuery.Subjects)
+	}
+	var body struct {
+		Subject string               `json:"subject"`
+		Rows    []openmeter.UsageRow `json:"rows"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Subject != "tenant-a:alice" {
+		t.Fatalf("subject = %q", body.Subject)
+	}
+	if len(body.Rows) != 1 || body.Rows[0].Subject != "tenant-a:alice" {
+		t.Fatalf("rows = %+v", body.Rows)
+	}
+}
+
+func TestUsageSelfRejectsInvalidVerifierResult(t *testing.T) {
+	h := newBoundaryServer(&fakeAdmin{}, fakeUsageVerifier{err: errors.New("invalid token")})
+
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/usage?meter=billable_usd_micros", "bad-token")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", rec.Code)
+	}
+}
+
 func TestUnconfiguredBoundaryFailsClosed(t *testing.T) {
 	// No authenticator wired at all: routes must refuse rather than default open.
-	srv := httpapi.NewServer(config.Config{}, nil, nil, nil, nil, nil, nil, &fakeAdmin{})
+	srv := httpapi.NewServer(config.Config{}, nil, nil, nil, nil, nil, nil, nil, &fakeAdmin{})
 	rec := do(t, srv.Handler(), http.MethodGet,
 		"/api/v1/apps/tenant-a/usage?meter=m", platformID, platformSecret)
 	if rec.Code == http.StatusOK {
@@ -365,7 +444,7 @@ func TestBoundaryEndToEndWithRealClient(t *testing.T) {
 
 	cfg := config.Config{SignerM2MClientID: platformID, SignerM2MSecret: platformSecret}
 	auth := tenantauth.New(platformID, platformSecret, map[string]string{"tenant-a": "secret-a"})
-	h := httpapi.NewServer(cfg, nil, nil, nil, nil, nil, auth, openmeter.New(konnect.URL, "kpat_test")).Handler()
+	h := httpapi.NewServer(cfg, nil, nil, nil, nil, nil, nil, auth, openmeter.New(konnect.URL, "kpat_test")).Handler()
 
 	// tenant-a reads its own app: only its own subject reaches the backend,
 	// even though the shared org contains tenant-b's customer.
@@ -395,7 +474,7 @@ func TestBoundaryEndToEndWithRealClient(t *testing.T) {
 // was serialised with strconv.FormatInt, which contradicted the request schema
 // and would break any client decoding it as an integer.
 func TestGrantResponseAmountIsANumber(t *testing.T) {
-	h := newBoundaryServer(&fakeAdmin{})
+	h := newBoundaryServer(&fakeAdmin{}, nil)
 	rec := do(t, h, http.MethodPost,
 		"/api/v1/apps/tenant-a/users/alice/grants", "tenant-a", "secret-a")
 	if rec.Code != http.StatusOK {

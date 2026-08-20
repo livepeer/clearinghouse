@@ -65,7 +65,7 @@ func TestHandleOIDCTokenRejectsUnsupportedGrantType(t *testing.T) {
 		stubMinter{},
 		stubProvisioner{},
 	)
-	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil)
+	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil, nil)
 
 	body := "grant_type=client_credentials&subject_token=sk_demo&subject_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps/pub-client/oidc/token", strings.NewReader(body))
@@ -106,7 +106,7 @@ func TestHandleOIDCTokenAPIKeyExchange(t *testing.T) {
 		stubMinter{},
 		stubProvisioner{},
 	)
-	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil)
+	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil, nil)
 
 	body := strings.Join([]string{
 		"grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange",
@@ -127,6 +127,49 @@ func TestHandleOIDCTokenAPIKeyExchange(t *testing.T) {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"issued_token_type":"urn:ietf:params:oauth:token-type:access_token"`) {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestHandleOIDCTokenAPIKeyExchangeWithoutClientPath(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{
+		Auth0Audience:     "livepeer-clearinghouse",
+		SignerM2MClientID: "m2m-client",
+		SignerM2MSecret:   "m2m-secret",
+		APIKeyPrefix:      "sk_",
+	}
+	handler := tokenexchange.NewHandler(
+		cfg,
+		nil,
+		&apikey.Store{
+			Prefix: "sk_",
+			Demo: map[string]apikey.DemoEntry{
+				"sk_demo": {ClientID: "pub-client", UserID: "demo-user"},
+			},
+		},
+		stubMinter{},
+		stubProvisioner{},
+	)
+	srv := httpapi.NewServer(cfg, nil, nil, nil, handler, nil, nil, nil, nil)
+
+	body := strings.Join([]string{
+		"grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange",
+		"subject_token=sk_demo",
+		"subject_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
+		"audience=livepeer-clearinghouse",
+	}, "&")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/oidc/token", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"access_token":"minted"`) {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 }

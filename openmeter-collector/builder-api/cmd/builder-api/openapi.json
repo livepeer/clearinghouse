@@ -130,6 +130,40 @@
         }
       }
     },
+    "/api/v1/oidc/token": {
+      "post": {
+        "summary": "RFC 8693 signer session token exchange (client inferred)",
+        "description": "Same exchange as `/api/v1/apps/{clientId}/oidc/token`, but without a path client id. The target app is inferred from the `subject_token`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenExchangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signer session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, grant, target, or unsupported token type"
+          },
+          "401": {
+            "description": "Invalid client credentials"
+          }
+        }
+      }
+    },
     "/api/v1/apps/{clientId}/usage": {
       "get": {
         "summary": "Query metered usage for an app",
@@ -211,6 +245,70 @@
           },
           "503": {
             "description": "Metering backend not configured"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/usage": {
+      "get": {
+        "summary": "Query metered usage for the authenticated user",
+        "description": "User-scoped usage route. Identity is derived from the Bearer signer JWT; the app client id is inferred from token claims.",
+        "security": [
+          {
+            "signerBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "meter",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "groupBy",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage rows scoped to the authenticated user"
+          },
+          "400": {
+            "description": "Invalid meter or time window"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "502": {
+            "description": "Metering backend unavailable"
+          },
+          "503": {
+            "description": "JWT verifier or metering backend is not configured"
           }
         }
       }
@@ -361,6 +459,12 @@
         "type": "http",
         "scheme": "basic",
         "description": "Tenant admin credentials: username is the tenant clientId, password is its secret from TENANT_ADMIN_KEYS. A tenant may only address its own clientId; the platform M2M credential (m2mBasic) may address any. A request for another tenant answers 404, not 403, so that a shared OpenMeter tenant does not confirm which client ids exist."
+      },
+      "signerBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Signer JWT minted by the RFC 8693 token-exchange endpoint."
       }
     },
     "schemas": {

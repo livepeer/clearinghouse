@@ -102,13 +102,12 @@ func (h *Handler) Exchange(ctx context.Context, req Request, correlationID strin
 	}
 
 	publicClientID := strings.TrimSpace(req.PublicClientID)
-	if publicClientID == "" {
-		return nil, invalidRequest("clientId is required")
-	}
-
 	clientID, externalUserID, err := h.resolveSubject(ctx, req.SubjectToken, publicClientID)
 	if err != nil {
 		return nil, err
+	}
+	if publicClientID == "" {
+		publicClientID = clientID
 	}
 
 	session, err := h.openmeter.ProvisionSession(ctx, h.provisionConfig(), clientID, externalUserID)

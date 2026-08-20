@@ -46,7 +46,12 @@ ambiguous; the API rejects it with `400`.
 
 ## Authentication
 
-HTTP Basic on every admin route.
+Two usage access patterns:
+
+1. **Admin routes** (`/api/v1/apps/{clientId}/...`) use HTTP Basic.
+2. **User self route** (`/api/v1/users/me/usage`) uses Bearer signer JWT.
+
+### Admin (HTTP Basic)
 
 | Principal | Username | Password | May address |
 | --- | --- | --- | --- |
@@ -67,6 +72,14 @@ curl -u "$AUTH0_SIGNER_M2M_CLIENT_ID:$AUTH0_SIGNER_M2M_CLIENT_SECRET" \
 # Tenant
 curl -u "$CLIENT_ID:$TENANT_SECRET" \
   "$BUILDER_API/api/v1/apps/$CLIENT_ID/usage?meter=billable_usd_micros"
+```
+
+### End user (Bearer signer JWT)
+
+```bash
+SIGNER_JWT=eyJ...
+curl -sS -H "Authorization: Bearer $SIGNER_JWT" \
+  "$BUILDER_API/api/v1/users/me/usage?meter=billable_usd_micros" | jq .
 ```
 
 ---
@@ -111,6 +124,17 @@ Example shape:
   ],
   "rows": []
 }
+```
+
+### Self usage — `GET /api/v1/users/me/usage`
+
+Same query parameters as app usage (`meter`, optional `from`/`to`/`groupBy`),
+but identity is derived from the signer JWT claims. The response is scoped to
+exactly one subject (`{clientId}:{externalUserId}`) from that token.
+
+```bash
+curl -sS -H "Authorization: Bearer $SIGNER_JWT" \
+  "$BUILDER_API/api/v1/users/me/usage?meter=billable_usd_micros" | jq .
 ```
 
 ### Access — `GET /api/v1/apps/{clientId}/users/{externalUserId}/access`
@@ -161,6 +185,7 @@ Konnect meter ULID before querying.
 | Code | Meaning |
 | --- | --- |
 | `401` | Missing / wrong Basic credentials |
+| `401` | Missing / invalid Bearer token on `/api/v1/users/me/usage` |
 | `404` | Unknown app for this principal, or unknown customer on access/grant |
 | `400` | Bad `externalUserId` (e.g. contains `:`) or invalid grant body |
 | `502` | Konnect/OpenMeter call failed |

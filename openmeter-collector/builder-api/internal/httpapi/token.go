@@ -50,10 +50,6 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	publicClientID := strings.TrimSpace(r.PathValue("clientId"))
-	if publicClientID == "" {
-		writeTokenExchangeError(w, http.StatusBadRequest, "invalid_request", "clientId is required")
-		return
-	}
 
 	clientID, clientSecret, _ := ClientCredentialsFromRequest(r, form)
 	req := tokenexchange.Request{
