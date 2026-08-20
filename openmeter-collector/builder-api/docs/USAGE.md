@@ -68,6 +68,55 @@ Example shape:
 }
 ```
 
+### `GET /api/v1/users/me/payment-method`
+
+Same identity rules. Returns whether Konnect has a default Stripe payment
+method on the OpenMeter customer. Missing Stripe app or billing data is
+`hasDefaultPaymentMethod: false`. Konnect/OpenMeter transport or HTTP errors
+are `502`, not a false negative.
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $SIGNER_JWT" \
+  "$BUILDER_API/api/v1/users/me/payment-method" | jq .
+```
+
+Example shape:
+
+```json
+{
+  "clientId": "xEJfZBtEP0JLJtlXm9UnJrDrA9bwepLx",
+  "externalUserId": "demo-user",
+  "subject": "xEJfZBtEP0JLJtlXm9UnJrDrA9bwepLx:demo-user",
+  "hasDefaultPaymentMethod": false,
+  "stripeCustomerId": ""
+}
+```
+
+### `POST /api/v1/users/me/payment-method`
+
+Starts OpenMeter/Konnect Stripe Checkout in setup mode for the same customer.
+`successUrl` and `cancelUrl` must be `https` with a host and no userinfo.
+The response `checkoutUrl` is always a `checkout.stripe.com` host. The shared
+OpenMeter org must have the Stripe app installed.
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $SIGNER_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"successUrl":"https://app.example.com/billing/ok","cancelUrl":"https://app.example.com/billing/cancel"}' \
+  "$BUILDER_API/api/v1/users/me/payment-method" | jq .
+```
+
+Example shape:
+
+```json
+{
+  "checkoutUrl": "https://checkout.stripe.com/c/pay/cs_test_xxx",
+  "sessionId": "cs_test_xxx"
+}
+```
+
 ---
 
 ## Token minting
@@ -107,9 +156,9 @@ curl -sS \
 
 | Code | Meaning |
 | --- | --- |
-| `400` | Invalid query params (time window) |
+| `400` | Invalid query params (time window) or non-https checkout redirect URLs |
 | `401` | Missing/invalid Bearer token (usage) or invalid client/token (exchange) |
 | `402` | `insufficient_allowance` on token exchange when allowance enforcement is enabled |
-| `404` | OpenMeter customer not found (balance) |
-| `502` | OpenMeter query failure |
+| `404` | OpenMeter customer not found (balance / payment method) |
+| `502` | OpenMeter query or checkout session failure |
 | `503` | JWT verifier or metering backend not configured |
