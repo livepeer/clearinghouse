@@ -10,6 +10,9 @@ import (
 
 // M2MAuth validates HTTP Basic auth against the configured signer M2M client.
 func M2MAuth(r *http.Request, expectedClientID, expectedSecret string) bool {
+	if strings.TrimSpace(expectedClientID) == "" || strings.TrimSpace(expectedSecret) == "" {
+		return false
+	}
 	clientID, secret, ok := ClientCredentialsFromRequest(r, nil)
 	if !ok {
 		return false
