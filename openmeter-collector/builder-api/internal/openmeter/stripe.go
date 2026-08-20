@@ -53,8 +53,8 @@ type stripeCheckoutResponse struct {
 }
 
 // GetStripeBillingRefs reads Konnect customer billing app_data. Missing Stripe
-// app or empty document returns zero refs (fail-open). Transport / HTTP errors
-// are returned so callers can decide.
+// app, empty document, or 404 returns zero refs. Transport / HTTP errors
+// (including JSON decode failures) are returned so callers can decide.
 func (c *Client) GetStripeBillingRefs(ctx context.Context, customerID string) (StripeBillingRefs, error) {
 	customerID = strings.TrimSpace(customerID)
 	if customerID == "" {
@@ -78,6 +78,7 @@ func (c *Client) GetStripeBillingRefs(ctx context.Context, customerID string) (S
 		return StripeBillingRefs{}, err
 	}
 	if resp.StatusCode == http.StatusNotFound {
+		// Konnect uses 404 when the customer has no billing profile / Stripe app.
 		return StripeBillingRefs{}, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -86,7 +87,7 @@ func (c *Client) GetStripeBillingRefs(ctx context.Context, customerID string) (S
 
 	var parsed customerBillingResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return StripeBillingRefs{}, nil
+		return StripeBillingRefs{}, fmt.Errorf("openmeter customer billing: decode: %w", err)
 	}
 	if parsed.AppData == nil || parsed.AppData.Stripe == nil {
 		return StripeBillingRefs{}, nil
@@ -194,11 +195,19 @@ func fragmentOrEmpty(u *url.URL) string {
 	return "#" + u.EscapedFragment()
 }
 
-// HTTPSRedirectURL returns the trimmed URL when it is https with a host, else "".
+// HTTPSRedirectURL returns a reconstructed https URL with a host and no
+// userinfo, or empty if the input is not a safe redirect target.
 func HTTPSRedirectURL(raw string) string {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Opaque != "" {
 		return ""
 	}
-	return strings.TrimSpace(raw)
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return ""
+	}
+	if port := parsed.Port(); port != "" {
+		host = host + ":" + port
+	}
+	return "https://" + host + parsed.EscapedPath() + queryOrEmpty(parsed) + fragmentOrEmpty(parsed)
 }

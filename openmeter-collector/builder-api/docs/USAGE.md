@@ -72,7 +72,8 @@ Example shape:
 
 Same identity rules. Returns whether Konnect has a default Stripe payment
 method on the OpenMeter customer. Missing Stripe app or billing data is
-`hasDefaultPaymentMethod: false`, not an error.
+`hasDefaultPaymentMethod: false`. Konnect/OpenMeter transport or HTTP errors
+are `502`, not a false negative.
 
 ```bash
 curl -sS \
@@ -95,9 +96,9 @@ Example shape:
 ### `POST /api/v1/users/me/payment-method`
 
 Starts OpenMeter/Konnect Stripe Checkout in setup mode for the same customer.
-`successUrl` and `cancelUrl` must be `https`. The response `checkoutUrl` is
-always a `checkout.stripe.com` host. The shared OpenMeter org must have the
-Stripe app installed.
+`successUrl` and `cancelUrl` must be `https` with a host and no userinfo.
+The response `checkoutUrl` is always a `checkout.stripe.com` host. The shared
+OpenMeter org must have the Stripe app installed.
 
 ```bash
 curl -sS \

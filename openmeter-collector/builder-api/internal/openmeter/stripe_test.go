@@ -31,14 +31,22 @@ func TestStripeCheckoutURL(t *testing.T) {
 
 func TestHTTPSRedirectURL(t *testing.T) {
 	t.Parallel()
-	if got := HTTPSRedirectURL("https://app.example.com/ok"); got != "https://app.example.com/ok" {
-		t.Fatalf("got %q", got)
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"https://app.example.com/ok", "https://app.example.com/ok"},
+		{"https://app.example.com/ok?session={CHECKOUT_SESSION_ID}", "https://app.example.com/ok?session={CHECKOUT_SESSION_ID}"},
+		{"https://localhost:3000/billing/ok", "https://localhost:3000/billing/ok"},
+		{"http://app.example.com/ok", ""},
+		{"javascript:alert(1)", ""},
+		{"https://evil.com@app.example.com/ok", ""},
+		{"https://user:pass@app.example.com/ok", ""},
 	}
-	if HTTPSRedirectURL("http://app.example.com/ok") != "" {
-		t.Fatal("http should be rejected")
-	}
-	if HTTPSRedirectURL("javascript:alert(1)") != "" {
-		t.Fatal("javascript should be rejected")
+	for _, tc := range cases {
+		if got := HTTPSRedirectURL(tc.in); got != tc.want {
+			t.Fatalf("%q: got %q want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -65,6 +73,20 @@ func TestGetStripeBillingRefs(t *testing.T) {
 	}
 	if refs.StripeCustomerID != "cus_123" || refs.DefaultPaymentMethodID != "pm_abc" || !refs.HasDefaultPaymentMethod {
 		t.Fatalf("%+v", refs)
+	}
+}
+
+func TestGetStripeBillingRefsDecodeError(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := New(srv.URL, "token").GetStripeBillingRefs(context.Background(), "cust-1")
+	if err == nil {
+		t.Fatal("expected decode error")
 	}
 }
 

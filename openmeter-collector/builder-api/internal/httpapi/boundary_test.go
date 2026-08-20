@@ -328,20 +328,29 @@ func TestPaymentMethodSelfReturnsBillingRefs(t *testing.T) {
 	}
 }
 
-func TestPaymentMethodSelfGETFailOpenOnBillingError(t *testing.T) {
-	h := newServer(&fakeUsageReader{billingErr: errors.New("konnect down")}, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
+func TestPaymentMethodSelfGETEmptyBilling(t *testing.T) {
+	h := newServer(&fakeUsageReader{}, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
 	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/payment-method", "header.payload.signature")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
 	}
 	var body struct {
-		HasDefaultPaymentMethod bool `json:"hasDefaultPaymentMethod"`
+		HasDefaultPaymentMethod bool   `json:"hasDefaultPaymentMethod"`
+		StripeCustomerID        string `json:"stripeCustomerId"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.HasDefaultPaymentMethod {
+	if body.HasDefaultPaymentMethod || body.StripeCustomerID != "" {
 		t.Fatalf("%+v", body)
+	}
+}
+
+func TestPaymentMethodSelfGETBadGatewayOnBillingError(t *testing.T) {
+	h := newServer(&fakeUsageReader{billingErr: errors.New("konnect down")}, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
+	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/payment-method", "header.payload.signature")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("got %d, want 502: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -371,6 +380,21 @@ func TestPaymentMethodSelfPOSTCreatesCheckout(t *testing.T) {
 	}
 	if body.CheckoutURL != "https://checkout.stripe.com/c/pay/cs_test_1" || body.SessionID != "cs_test_1" {
 		t.Fatalf("%+v", body)
+	}
+}
+
+func TestPaymentMethodSelfPOSTRejectsUserinfo(t *testing.T) {
+	h := newServer(&fakeUsageReader{}, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/payment-method", strings.NewReader(`{
+		"successUrl":"https://evil.com@app.example.com/ok",
+		"cancelUrl":"https://app.example.com/cancel"
+	}`))
+	req.Header.Set("Authorization", "Bearer header.payload.signature")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

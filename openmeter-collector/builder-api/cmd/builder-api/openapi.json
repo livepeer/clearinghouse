@@ -197,7 +197,7 @@
           "Users"
         ],
         "summary": "Read whether the authenticated user has a default payment method",
-        "description": "Identity is derived from the Bearer signer JWT. Reads Konnect customer billing app_data for the OpenMeter customer `{clientId}:{externalUserId}`. Missing Stripe app or billing data returns hasDefaultPaymentMethod=false.",
+        "description": "Identity is derived from the Bearer signer JWT. Reads Konnect customer billing app_data for the OpenMeter customer `{clientId}:{externalUserId}`. Missing Stripe app or billing data returns hasDefaultPaymentMethod=false. Konnect/OpenMeter transport or HTTP errors return 502.",
         "security": [
           {
             "signerBearer": []
@@ -220,6 +220,9 @@
           "404": {
             "description": "OpenMeter customer not found"
           },
+          "502": {
+            "description": "Billing lookup failed"
+          },
           "503": {
             "description": "JWT verifier or metering backend is not configured"
           }
@@ -230,7 +233,7 @@
           "Users"
         ],
         "summary": "Start Stripe Checkout to link a payment method",
-        "description": "Creates a Konnect/OpenMeter Stripe Checkout session in setup mode for the authenticated user's OpenMeter customer. Requires https successUrl and cancelUrl. Returns only a checkout.stripe.com URL. The OpenMeter Stripe app must be installed on the shared org.",
+        "description": "Creates a Konnect/OpenMeter Stripe Checkout session in setup mode for the authenticated user's OpenMeter customer. Requires https successUrl and cancelUrl with a host and no userinfo. Returns only a checkout.stripe.com URL. The OpenMeter Stripe app must be installed on the shared org.",
         "security": [
           {
             "signerBearer": []
@@ -258,7 +261,7 @@
             }
           },
           "400": {
-            "description": "successUrl or cancelUrl is missing or not https"
+            "description": "successUrl or cancelUrl is missing, not https, or includes userinfo"
           },
           "401": {
             "description": "Missing or invalid bearer token"

@@ -187,7 +187,8 @@ func (s *Server) handlePaymentMethodSelfGET(w http.ResponseWriter, r *http.Reque
 	}
 	refs, err := s.usageReader.GetStripeBillingRefs(r.Context(), customer.ID)
 	if err != nil {
-		refs = openmeter.StripeBillingRefs{}
+		writeAPIError(w, http.StatusBadGateway, "billing lookup failed")
+		return
 	}
 	writeJSON(w, http.StatusOK, selfPaymentMethodResponse{
 		ClientID:                clientID,
