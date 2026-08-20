@@ -82,6 +82,61 @@
         }
       }
     },
+    "/api/v1/apps/{clientId}/users/{externalUserId}/api-key": {
+      "post": {
+        "summary": "Rotate an end-user API key",
+        "description": "Issues a new long-lived end-user API key (`sk_*`) for an existing user. The previous key is invalidated immediately. The plaintext key is returned once.",
+        "security": [
+          {
+            "m2mBasic": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Public Auth0 client id for the integrator app"
+          },
+          {
+            "name": "externalUserId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Integrator-scoped end-user identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "API key rotated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateAPIKeyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "503": {
+            "description": "Auth0 is not configured"
+          }
+        }
+      }
+    },
     "/api/v1/oidc/token": {
       "post": {
         "summary": "RFC 8693 signer session token exchange (client inferred)",
@@ -239,6 +294,30 @@
           "apiKey": {
             "type": "string",
             "description": "Returned once when issueApiKey is true"
+          }
+        }
+      },
+      "RotateAPIKeyResponse": {
+        "type": "object",
+        "required": [
+          "clientId",
+          "externalUserId",
+          "apiKey",
+          "status"
+        ],
+        "properties": {
+          "clientId": {
+            "type": "string"
+          },
+          "externalUserId": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "New plaintext API key returned once"
+          },
+          "status": {
+            "type": "string"
           }
         }
       },

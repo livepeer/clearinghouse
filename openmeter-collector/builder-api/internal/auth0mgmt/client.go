@@ -3,6 +3,7 @@ package auth0mgmt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,9 @@ import (
 
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/apikey"
 )
+
+// ErrUserNotFound is returned when no Auth0 user matches clientId + externalUserId.
+var ErrUserNotFound = errors.New("user not found")
 
 // Client wraps Auth0 Management API user operations.
 type Client struct {
@@ -122,6 +126,33 @@ func (c *Client) UpsertUser(ctx context.Context, publicClientID, externalUserID,
 		rec.APIKey = plaintext
 	}
 	return rec, nil
+}
+
+// RotateAPIKey replaces the end-user API key stored in Auth0 app_metadata.
+// The previous key is invalidated immediately. The plaintext key is returned once.
+func (c *Client) RotateAPIKey(ctx context.Context, publicClientID, externalUserID, keyPrefix string) (string, error) {
+	existing, err := c.findByMetadata(ctx, publicClientID, externalUserID)
+	if err != nil {
+		return "", err
+	}
+	if existing == nil {
+		return "", ErrUserNotFound
+	}
+
+	plaintext, stored, err := apikey.Generate(keyPrefix, existing.GetUserID())
+	if err != nil {
+		return "", err
+	}
+
+	appMeta := cloneAppMetadata(existing.GetAppMetadata())
+	appMeta["builder_api_key"] = stored
+	meta := appMeta
+	if _, err := c.api.Users.Update(ctx, existing.GetUserID(), &management.UpdateUserRequestContent{
+		AppMetadata: &meta,
+	}); err != nil {
+		return "", fmt.Errorf("store api key metadata: %w", err)
+	}
+	return plaintext, nil
 }
 
 // ResolveAPIKeyUser validates an API key and returns client/external user ids.

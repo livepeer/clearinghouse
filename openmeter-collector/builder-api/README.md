@@ -60,6 +60,7 @@ parked. Builder-api talks only to the shared org.
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/apps/{clientId}/users` | M2M Basic | Create/upsert Auth0 user + OpenMeter customer; returns `apiKey` once |
+| `POST` | `/api/v1/apps/{clientId}/users/{externalUserId}/api-key` | M2M Basic | Rotate end-user API key; returns new `apiKey` once, invalidates previous key |
 | `POST` | `/api/v1/oidc/token` | RFC 8693 form + subject token | Exchange Auth0 user JWT or `sk_*` API key for signer JWT; client inferred from token |
 
 ## Auth0 prerequisites
@@ -141,6 +142,29 @@ curl -sS -u "$AUTH0_SIGNER_M2M_CLIENT_ID:$AUTH0_SIGNER_M2M_CLIENT_SECRET" \
 ```
 
 Use the public client id from `.env.livepeer` as the `{clientId}` path segment (e.g. `DEMO_APP_AUTH0_PUBLIC_CLIENT_ID`).
+
+## Example: rotate end-user API key
+
+When an end-user loses their `sk_*` key (or it is compromised), the integrator can
+issue a replacement. The previous key is invalidated immediately.
+
+```bash
+set -a; source openmeter-collector/.env; set +a
+curl -sS -u "$AUTH0_SIGNER_M2M_CLIENT_ID:$AUTH0_SIGNER_M2M_CLIENT_SECRET" \
+  -X POST \
+  "http://localhost:8095/api/v1/apps/${DEMO_APP_AUTH0_PUBLIC_CLIENT_ID}/users/user-123/api-key"
+```
+
+Response:
+
+```json
+{
+  "clientId": "...",
+  "externalUserId": "user-123",
+  "apiKey": "sk_...",
+  "status": "active"
+}
+```
 
 ## Example: RFC 8693 signer session exchange
 
