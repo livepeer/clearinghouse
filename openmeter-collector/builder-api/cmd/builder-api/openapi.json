@@ -82,35 +82,31 @@
         }
       }
     },
-    "/api/v1/apps/{clientId}/users/{externalUserId}/api-key": {
+    "/api/v1/users/me/api-key": {
       "post": {
-        "summary": "Rotate an end-user API key",
-        "description": "Issues a new long-lived end-user API key (`sk_*`) for an existing user. The previous key is invalidated immediately. The plaintext key is returned once.",
+        "summary": "Rotate the authenticated user's API key",
+        "description": "Issues a new long-lived end-user API key (`sk_*`). Identity is derived from a subject token (Bearer header or form `subject_token`): Auth0 user JWT or existing `sk_*` API key. The app client id is inferred from the token. The previous key is invalidated immediately.",
         "security": [
           {
-            "m2mBasic": []
+            "subjectBearer": []
           }
         ],
-        "parameters": [
-          {
-            "name": "clientId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Public Auth0 client id for the integrator app"
-          },
-          {
-            "name": "externalUserId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Integrator-scoped end-user identifier"
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "subject_token": {
+                    "type": "string",
+                    "description": "Alternative to Authorization Bearer; Auth0 user JWT or end-user API key (sk_*)"
+                  }
+                }
+              }
+            }
           }
-        ],
+        },
         "responses": {
           "200": {
             "description": "API key rotated",
@@ -122,17 +118,14 @@
               }
             }
           },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
-            "description": "Unauthorized"
+            "description": "Missing or invalid subject token"
           },
           "404": {
             "description": "User not found"
           },
           "503": {
-            "description": "Auth0 is not configured"
+            "description": "Subject resolution or Auth0 is not configured"
           }
         }
       }
@@ -248,6 +241,11 @@
         "scheme": "bearer",
         "bearerFormat": "JWT",
         "description": "Signer JWT minted by the RFC 8693 token-exchange endpoint."
+      },
+      "subjectBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Auth0 user access token (JWT) or end-user API key (sk_*). May also be supplied as form field subject_token."
       }
     },
     "schemas": {

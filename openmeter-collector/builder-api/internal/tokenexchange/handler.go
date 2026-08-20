@@ -215,6 +215,13 @@ func (h *Handler) validateTarget(resource string, audiences []string) error {
 	return nil
 }
 
+// ResolveSubject validates a subject token (JWT or API key) and returns the
+// tenant client id and external user id. The app is inferred from the token
+// when publicClientID is empty.
+func (h *Handler) ResolveSubject(ctx context.Context, subjectToken, publicClientID string) (clientID, externalUserID string, err error) {
+	return h.resolveSubject(ctx, subjectToken, publicClientID)
+}
+
 func (h *Handler) resolveSubject(ctx context.Context, subjectToken, publicClientID string) (clientID, externalUserID string, err error) {
 	subjectToken = strings.TrimSpace(subjectToken)
 	if strings.Count(subjectToken, ".") == 2 {

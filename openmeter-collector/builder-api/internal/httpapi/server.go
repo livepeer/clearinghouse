@@ -65,7 +65,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("GET /api/v1/docs", s.handleDocs)
 	mux.HandleFunc("POST /api/v1/apps/{clientId}/users", s.handleCreateUser)
-	mux.HandleFunc("POST /api/v1/apps/{clientId}/users/{externalUserId}/api-key", s.handleRotateAPIKey)
+	mux.HandleFunc("POST /api/v1/users/me/api-key", s.handleRotateAPIKeySelf)
 	mux.HandleFunc("POST /api/v1/oidc/token", s.handleOIDCToken)
 	mux.HandleFunc("GET /api/v1/users/me/usage", s.handleUsageSelf)
 	return mux
@@ -180,19 +180,40 @@ type rotateAPIKeyResponse struct {
 	Status         string `json:"status"`
 }
 
-func (s *Server) handleRotateAPIKey(w http.ResponseWriter, r *http.Request) {
-	clientID := strings.TrimSpace(r.PathValue("clientId"))
-	externalUserID := strings.TrimSpace(r.PathValue("externalUserId"))
-	if clientID == "" || externalUserID == "" {
-		writeAPIError(w, http.StatusBadRequest, "clientId and externalUserId are required")
-		return
-	}
-	if !M2MAuth(r, s.cfg.SignerM2MClientID, s.cfg.SignerM2MSecret) {
-		writeAPIError(w, http.StatusUnauthorized, "Unauthorized")
+// handleRotateAPIKeySelf serves POST /api/v1/users/me/api-key.
+//
+// Identity is derived from a subject token (Bearer header or form subject_token):
+// an Auth0 user JWT or end-user API key (sk_*). The app client id is inferred
+// from the token, matching the RFC 8693 token-exchange subject resolution path.
+func (s *Server) handleRotateAPIKeySelf(w http.ResponseWriter, r *http.Request) {
+	if s.tokenExchange == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "subject token resolution is not configured")
 		return
 	}
 	if s.auth0 == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "auth0 is not configured")
+		return
+	}
+
+	subjectToken, err := subjectTokenFromRequest(r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "malformed subject token request")
+		return
+	}
+	if subjectToken == "" {
+		writeBearerUnauthorized(w, "invalid_token", "missing subject token")
+		return
+	}
+
+	clientID, externalUserID, err := s.tokenExchange.ResolveSubject(r.Context(), subjectToken, "")
+	if err != nil {
+		writeBearerUnauthorized(w, "invalid_token", "invalid subject token")
+		return
+	}
+	clientID = strings.TrimSpace(clientID)
+	externalUserID = strings.TrimSpace(externalUserID)
+	if clientID == "" || externalUserID == "" || strings.Contains(externalUserID, ":") {
+		writeBearerUnauthorized(w, "invalid_token", "invalid subject token")
 		return
 	}
 

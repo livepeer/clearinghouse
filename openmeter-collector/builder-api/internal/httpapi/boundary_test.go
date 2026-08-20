@@ -94,6 +94,14 @@ func TestDeprecatedAppOIDCTokenRouteNotFound(t *testing.T) {
 	}
 }
 
+func TestDeprecatedRotateAPIKeyRouteNotFound(t *testing.T) {
+	h := newServer(&fakeUsageReader{}, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
+	rec := doBearer(t, h, http.MethodPost, "/api/v1/apps/tenant-a/users/alice/api-key", "sk_demo")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want 404", rec.Code)
+	}
+}
+
 func TestUsageSelfRequiresBearer(t *testing.T) {
 	h := newServer(&fakeUsageReader{}, fakeUsageVerifier{clientID: "tenant-a", externalUserID: "alice"})
 	rec := doBearer(t, h, http.MethodGet, "/api/v1/users/me/usage?meter=billable_usd_micros", "")

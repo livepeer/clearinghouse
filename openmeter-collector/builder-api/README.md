@@ -60,7 +60,7 @@ parked. Builder-api talks only to the shared org.
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/apps/{clientId}/users` | M2M Basic | Create/upsert Auth0 user + OpenMeter customer; returns `apiKey` once |
-| `POST` | `/api/v1/apps/{clientId}/users/{externalUserId}/api-key` | M2M Basic | Rotate end-user API key; returns new `apiKey` once, invalidates previous key |
+| `POST` | `/api/v1/users/me/api-key` | Subject token (Bearer or form) | Rotate end-user API key; client inferred from token |
 | `POST` | `/api/v1/oidc/token` | RFC 8693 form + subject token | Exchange Auth0 user JWT or `sk_*` API key for signer JWT; client inferred from token |
 
 ## Auth0 prerequisites
@@ -145,14 +145,25 @@ Use the public client id from `.env.livepeer` as the `{clientId}` path segment (
 
 ## Example: rotate end-user API key
 
-When an end-user loses their `sk_*` key (or it is compromised), the integrator can
-issue a replacement. The previous key is invalidated immediately.
+When an end-user loses their `sk_*` key (or it is compromised), rotate using the
+same subject tokens accepted by token exchange. Identity is inferred from the
+token — no `clientId` in the path.
+
+Bearer (existing API key or Auth0 user JWT):
 
 ```bash
-set -a; source openmeter-collector/.env; set +a
-curl -sS -u "$AUTH0_SIGNER_M2M_CLIENT_ID:$AUTH0_SIGNER_M2M_CLIENT_SECRET" \
-  -X POST \
-  "http://localhost:8095/api/v1/apps/${DEMO_APP_AUTH0_PUBLIC_CLIENT_ID}/users/user-123/api-key"
+curl -sS -X POST \
+  -H "Authorization: Bearer $SUBJECT_TOKEN" \
+  "http://localhost:8095/api/v1/users/me/api-key"
+```
+
+Form body (same shape as token exchange subject fields):
+
+```bash
+curl -sS -X POST \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "subject_token=$SUBJECT_TOKEN" \
+  "http://localhost:8095/api/v1/users/me/api-key"
 ```
 
 Response:
