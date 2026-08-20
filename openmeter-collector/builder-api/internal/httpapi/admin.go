@@ -76,6 +76,11 @@ func (s *Server) handleUsageSelf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	meter := s.cfg.UsageMeterKey()
+	groupBy := r.URL.Query()["groupBy"]
+	if msg := openmeter.ValidateUsageGroupBy(meter, groupBy); msg != "" {
+		writeAPIError(w, http.StatusBadRequest, msg)
+		return
+	}
 	from, to, err := parseWindow(r)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
@@ -87,13 +92,14 @@ func (s *Server) handleUsageSelf(w http.ResponseWriter, r *http.Request) {
 		Subjects:  []string{subject},
 		From:      from,
 		To:        to,
-		GroupBy:   r.URL.Query()["groupBy"],
+		GroupBy:   groupBy,
 	})
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, "usage query failed")
 		return
 	}
 	rows = filterRowsToSubject(rows, subject)
+	rows = filterRowsToActor(rows, clientID, externalUserID)
 	writeJSON(w, http.StatusOK, selfUsageResponse{
 		ClientID:       clientID,
 		ExternalUserID: externalUserID,
@@ -154,6 +160,23 @@ func filterRowsToSubject(rows []openmeter.UsageRow, subject string) []openmeter.
 	out := make([]openmeter.UsageRow, 0, len(rows))
 	for _, row := range rows {
 		if row.Subject == subject {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// filterRowsToActor drops rows whose client_id / external_user_id dimensions
+// do not match the JWT actor. Rows without those dimensions stay if the
+// subject filter already kept them.
+func filterRowsToActor(rows []openmeter.UsageRow, clientID, actor string) []openmeter.UsageRow {
+	out := make([]openmeter.UsageRow, 0, len(rows))
+	for _, row := range rows {
+		if row.GroupBy == nil || (row.GroupBy["client_id"] == "" && row.GroupBy["external_user_id"] == "") {
+			out = append(out, row)
+			continue
+		}
+		if openmeter.RowMatchesActor(row, clientID, actor) {
 			out = append(out, row)
 		}
 	}

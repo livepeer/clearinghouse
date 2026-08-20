@@ -18,7 +18,7 @@ const microsPerDollar = 1_000_000
 type Access struct {
 	HasAccess        bool
 	BalanceUSDMicros int64
-	Source           string // "credits" | "entitlement" | "none"
+	Source           string // "credits" | "entitlement" | "subscription" | "none"
 }
 
 type creditBalanceResponse struct {
@@ -57,7 +57,9 @@ type entitlementAccess struct {
 	Value      json.RawMessage `json:"value"`
 }
 
-// GetAccess reads credits balance first, then entitlement-access as fallback.
+// GetAccess reads credits balance first, then entitlement-access, then an
+// active subscription (Kong Starter / credit_then_invoice with discounts.usage
+// does not show prepaid credits or meter entitlements).
 func (c *Client) GetAccess(ctx context.Context, customerID, featureKey string) (*Access, error) {
 	customerID = strings.TrimSpace(customerID)
 	if customerID == "" {
@@ -68,11 +70,46 @@ func (c *Client) GetAccess(ctx context.Context, customerID, featureKey string) (
 	if err != nil {
 		return nil, err
 	}
-	if credits != nil {
+	// Prepaid credits with a positive live balance win. A zero balance is not a
+	// denial — Starter plans settle via rate-card discounts.usage, which does
+	// not appear in /credits/balance.
+	if credits != nil && credits.BalanceUSDMicros > 0 {
 		return credits, nil
 	}
 
-	return c.getEntitlementAccess(ctx, customerID, featureKey)
+	ent, err := c.getEntitlementAccess(ctx, customerID, featureKey)
+	if err != nil {
+		return nil, err
+	}
+	if ent != nil && ent.HasAccess {
+		return ent, nil
+	}
+
+	subs, err := c.listSubscriptions(ctx, customerID)
+	if err != nil {
+		return nil, err
+	}
+	for _, sub := range subs {
+		if strings.EqualFold(strings.TrimSpace(sub.Status), "active") {
+			balance := int64(0)
+			if credits != nil {
+				balance = credits.BalanceUSDMicros
+			}
+			return &Access{
+				HasAccess:        true,
+				BalanceUSDMicros: balance,
+				Source:           "subscription",
+			}, nil
+		}
+	}
+
+	if credits != nil {
+		return credits, nil
+	}
+	if ent != nil {
+		return ent, nil
+	}
+	return &Access{HasAccess: false, BalanceUSDMicros: 0, Source: "none"}, nil
 }
 
 func (c *Client) getCreditsBalance(ctx context.Context, customerID string) (*Access, error) {
