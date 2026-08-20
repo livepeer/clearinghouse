@@ -58,6 +58,11 @@ func tokenExchangeRequestFromJSON(r *http.Request, raw []byte) (tokenexchange.Re
 		clientID, clientSecret, _ = ClientCredentialsFromRequest(r, nil)
 	}
 
+	audiences, err := audiencesFromAny(body.Audience)
+	if err != nil {
+		return tokenexchange.Request{}, err
+	}
+
 	return tokenexchange.Request{
 		ClientID:           clientID,
 		ClientSecret:       clientSecret,
@@ -66,7 +71,7 @@ func tokenExchangeRequestFromJSON(r *http.Request, raw []byte) (tokenexchange.Re
 		SubjectTokenType:   body.SubjectTokenType,
 		RequestedTokenType: body.RequestedTokenType,
 		Resource:           body.Resource,
-		Audiences:          audiencesFromAny(body.Audience),
+		Audiences:          audiences,
 	}, nil
 }
 
@@ -89,31 +94,33 @@ func tokenExchangeRequestFromForm(r *http.Request, raw []byte) (tokenexchange.Re
 	}, nil
 }
 
-func audiencesFromAny(value any) []string {
+func audiencesFromAny(value any) ([]string, error) {
 	switch v := value.(type) {
 	case nil:
-		return nil
+		return nil, nil
 	case string:
 		v = strings.TrimSpace(v)
 		if v == "" {
-			return nil
+			return nil, nil
 		}
-		return []string{v}
+		return []string{v}, nil
 	case []string:
-		return nonEmptyStrings(v)
+		return nonEmptyStrings(v), nil
 	case []any:
 		out := make([]string, 0, len(v))
 		for _, item := range v {
-			if s, ok := item.(string); ok {
-				s = strings.TrimSpace(s)
-				if s != "" {
-					out = append(out, s)
-				}
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("audience must be a string or array of strings")
+			}
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
 			}
 		}
-		return out
+		return out, nil
 	default:
-		return nil
+		return nil, fmt.Errorf("audience must be a string or array of strings")
 	}
 }
 
