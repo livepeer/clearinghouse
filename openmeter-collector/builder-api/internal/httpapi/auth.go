@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"net/http"
 	"net/url"
@@ -13,7 +14,9 @@ func M2MAuth(r *http.Request, expectedClientID, expectedSecret string) bool {
 	if !ok {
 		return false
 	}
-	return clientID == expectedClientID && secret == expectedSecret
+	clientOK := subtle.ConstantTimeCompare([]byte(clientID), []byte(expectedClientID)) == 1
+	secretOK := subtle.ConstantTimeCompare([]byte(secret), []byte(expectedSecret)) == 1
+	return clientOK && secretOK
 }
 
 // ClientCredentialsFromRequest extracts OAuth client credentials from Basic auth

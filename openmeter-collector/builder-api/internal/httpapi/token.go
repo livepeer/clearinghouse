@@ -49,11 +49,8 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	publicClientID := strings.TrimSpace(r.PathValue("clientId"))
-
 	clientID, clientSecret, _ := ClientCredentialsFromRequest(r, form)
 	req := tokenexchange.Request{
-		PublicClientID:     publicClientID,
 		ClientID:           clientID,
 		ClientSecret:       clientSecret,
 		GrantType:          form.Get("grant_type"),
