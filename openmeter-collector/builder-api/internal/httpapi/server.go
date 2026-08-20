@@ -126,6 +126,14 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
+	if s.auth0 == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "auth0 is not configured")
+		return
+	}
+	if s.openmeter == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "openmeter is not configured")
+		return
+	}
 
 	body, err := readJSONBody[createUserRequest](r)
 	if err != nil {

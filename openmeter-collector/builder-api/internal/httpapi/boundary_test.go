@@ -159,3 +159,11 @@ func TestCreateUserRequiresM2MBasic(t *testing.T) {
 		t.Fatalf("got %d, want 401", rec.Code)
 	}
 }
+
+func TestCreateUserUnavailableWithoutDeps(t *testing.T) {
+	h := newServer(&fakeUsageReader{}, nil)
+	rec := doBasic(t, h, http.MethodPost, "/api/v1/apps/app-1/users", platformID, platformSecret)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("got %d, want 503", rec.Code)
+	}
+}
