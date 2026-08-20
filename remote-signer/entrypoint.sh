@@ -45,6 +45,8 @@ if [ -n "${REMOTE_SIGNER_WEBHOOK_URL:-}" ]; then
     "-remoteSignerWebhookHeaders=Authorization:Bearer ${WEBHOOK_SECRET}"
 else
   echo "entrypoint: WARNING: starting remote signer without identity webhook authorization" >&2
+  # Allow running the signer without a webhook (local alive checks only, not production).
+  set -- "$@" -remoteSignerAllowNoAuth
 fi
 
 if [ -n "${SIGNER_ETH_ADDR:-}" ]; then
