@@ -126,6 +126,59 @@ docker compose logs --tail=20 openmeter-collector
 
 Re-runs are dedup-safe (OpenMeter deduplicates by event id). A real signer-emitted event needs a full gateway or [local SDK](https://github.com/livepeer/livepeer-python-gateway) to call a real job with a funded signer — out of scope here.
 
+### 3. Local smoke test (mock profile)
+
+The `mock` Compose profile starts a tiny HTTP server that stands in for the external services. **Opt in only** — it is not started by default. It exposes three endpoints:
+
+| Endpoint | Mocks | Behaviour |
+| --- | --- | --- |
+| `POST /authorize` | identity webhook | Validates `Authorization: Bearer <WEBHOOK_SECRET>` and returns `{"status":200,"auth_id":"<MOCK_AUTH_ID>"}`. go-livepeer stamps the returned `auth_id` (`client_id:usage_subject`) onto the Kafka event it emits. |
+| `POST /events` | OpenMeter/Konnect ingest | Logs the CloudEvents payload and returns `204`. |
+| `GET /prices` | ETH/USD price oracle | Returns a Coinbase-shaped `{"data":{"amount":"<MOCK_ETH_USD>"}}` so the collector can warm its price cache offline. |
+
+`MOCK_AUTH_ID` (default `demo-client:demo-user`) and `MOCK_ETH_USD` (default `3500.00`) are set on the `mock-services` service in [`docker-compose.yml`](docker-compose.yml).
+
+Set these values when using the mock:
+
+```bash
+# remote-signer/.env
+REMOTE_SIGNER_WEBHOOK_URL=http://mock-services:8080/authorize
+WEBHOOK_SECRET=dev-secret
+
+# openmeter-collector/.env
+OPENMETER_INGEST_URL=http://mock-services:8080/events
+OPENMETER_API_KEY=mock-local-key
+# With the price-oracle collector, point the oracle at the mock for a fully
+# offline run (replaces the static ETH_USD_PRICE):
+PRICE_ORACLE_URL=http://mock-services:8080/prices
+```
+
+Start Kafka, mock services, and the collector:
+
+```bash
+docker compose --profile mock up -d --build kafka mock-services openmeter-collector
+```
+
+Produce a sample `create_signed_ticket` event (matches [`openmeter-collector/collector.yaml`](openmeter-collector/collector.yaml) expectations):
+
+```bash
+docker compose exec kafka \
+  rpk topic produce livepeer-gateway-events --format '%v' <<'EOF'
+{"type":"create_signed_ticket","data":{"auth_id":"demo-client:demo-user","computed_fee":"1000000000000000","request_id":"smoke-req-1","pipeline":"lv2v","model_id":"daydream-video","pixels":"1920","current_time":"2026-06-24T12:00:00Z"}}
+EOF
+```
+
+Confirm the mock received ingest traffic:
+
+```bash
+docker compose --profile mock logs mock-services
+# expected: mock-services: POST /events ... ingest payload=...
+```
+
+With the normalized CloudEvents collector, the logged ingest payload carries
+`subject` = `usage_subject` (end user) and `data.client_id` / `data.usage_subject`
+/ `data.usage_subject_type` alongside `data.auth_id`.
+
 ## Environment variables
 
 Canonical copy with inline comments: [`.env.example`](.env.example). Summary by service:

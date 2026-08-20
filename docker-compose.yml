@@ -77,5 +77,20 @@ services:
     volumes:
       - ./.env:/service/.env:ro
 
+  mock-services:
+    profiles: ["mock"]
+    build:
+      context: .
+      dockerfile: mock-services/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./remote-signer/.env
+    environment:
+      MOCK_PORT: "8080"
+      # auth_id returned by /authorize (go-livepeer stamps it onto Kafka events).
+      MOCK_AUTH_ID: "demo-client:demo-user"
+      # ETH/USD served by /prices for the collector oracle cache.
+      MOCK_ETH_USD: "3500.00"
+
 # Signer datadir is bind-mounted from remote-signer/data.
 # Copy keystore + .eth-password into remote-signer/data before first run.
