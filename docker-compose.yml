@@ -51,6 +51,8 @@ services:
     build:
       context: .
       dockerfile: remote-signer/Dockerfile
+      # Pull the pinned digest. A local image tagged stable can be a different build.
+      pull: true
     restart: unless-stopped
     # Kafka only — identity-webhook is optional (signer-only alive checks).
     depends_on:
