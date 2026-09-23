@@ -5,7 +5,7 @@
 # go-livepeer runs directly in this container. Only the signing HTTP port is EXPOSE'd
 # and published. The CLI/admin port (-cliAddr) is bound to loopback inside the
 # container and is never exposed or published — not here, not in docker-compose.
-FROM livepeer/go-livepeer@sha256:5e8cb7461fcceb55df06892b2a00a4f5957164b559b159985b80a03733fe796b
+FROM livepeer/go-livepeer@sha256:0c9cd9b40482f16c12caa0b6e034ddbe167558c8c29fea2e4e78a9bf831c9360
 
 RUN mkdir -p /data
 
