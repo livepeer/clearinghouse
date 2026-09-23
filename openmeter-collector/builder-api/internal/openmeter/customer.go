@@ -17,8 +17,10 @@ type Customer struct {
 	Key string `json:"key"`
 }
 
+// Konnect list endpoints return `items`; older OpenMeter shapes used `data`.
 type customerPage struct {
-	Data []Customer `json:"data"`
+	Items []Customer `json:"items"`
+	Data  []Customer `json:"data"`
 }
 
 type createCustomerRequest struct {
@@ -51,6 +53,7 @@ func New(baseURL, apiKey string) *Client {
 }
 
 // EnsureCustomer creates a customer when missing; idempotent on key.
+// Matches list-by-key with exact match, create, and on conflict re-fetch.
 func (c *Client) EnsureCustomer(ctx context.Context, clientID, externalUserID, displayName string) (*Customer, error) {
 	key := CustomerKey(clientID, externalUserID)
 	if displayName == "" {
@@ -93,15 +96,24 @@ func (c *Client) EnsureCustomer(ctx context.Context, clientID, externalUserID, d
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("openmeter create customer %d: %s", resp.StatusCode, string(respBody))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		var created Customer
+		if err := json.Unmarshal(respBody, &created); err != nil {
+			return nil, err
+		}
+		return &created, nil
 	}
-
-	var created Customer
-	if err := json.Unmarshal(respBody, &created); err != nil {
-		return nil, err
+	// 409: key or subject_keys already claimed — treat as success if we can load it.
+	if resp.StatusCode == http.StatusConflict {
+		raced, findErr := c.findByKey(ctx, key)
+		if findErr != nil {
+			return nil, findErr
+		}
+		if raced != nil {
+			return raced, nil
+		}
 	}
-	return &created, nil
+	return nil, fmt.Errorf("openmeter create customer %d: %s", resp.StatusCode, string(respBody))
 }
 
 // LookupCustomerByKey returns the customer for key, or (nil, nil) when missing.
@@ -116,7 +128,11 @@ func (c *Client) findByKey(ctx context.Context, key string) (*Customer, error) {
 		return nil, err
 	}
 	q := req.URL.Query()
-	q.Set("filter[key]", key)
+	// Konnect customers.list({ key }) is a case-insensitive partial match —
+	// require an exact key match on the returned page.
+	q.Set("key", key)
+	q.Set("page", "1")
+	q.Set("pageSize", "100")
 	req.URL.RawQuery = q.Encode()
 	c.setHeaders(req)
 
@@ -134,21 +150,13 @@ func (c *Client) findByKey(ctx context.Context, key string) (*Customer, error) {
 		return nil, fmt.Errorf("openmeter list customers %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	var page customerPage
-	if err := json.Unmarshal(respBody, &page); err == nil && len(page.Data) > 0 {
-		for _, cust := range page.Data {
-			if cust.Key == key {
-				return &cust, nil
-			}
-		}
+	list, err := decodeCustomerList(respBody)
+	if err != nil {
+		return nil, err
 	}
-
-	var list []Customer
-	if err := json.Unmarshal(respBody, &list); err == nil {
-		for _, cust := range list {
-			if cust.Key == key {
-				return &cust, nil
-			}
+	for _, cust := range list {
+		if cust.Key == key {
+			return &cust, nil
 		}
 	}
 	return nil, nil

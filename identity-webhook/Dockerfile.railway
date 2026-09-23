@@ -1,0 +1,9 @@
+FROM node:22-alpine
+RUN apk add --no-cache curl
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY keys.mjs protocol.mjs verifiers.mjs balance-gate.mjs server.mjs ./
+ENV PORT=8090
+EXPOSE 8090
+CMD ["node", "server.mjs"]
