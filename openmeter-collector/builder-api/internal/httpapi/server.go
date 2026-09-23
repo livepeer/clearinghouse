@@ -69,6 +69,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/oidc/token", s.handleOIDCToken)
 	mux.HandleFunc("GET /api/v1/users/me/usage", s.handleUsageSelf)
 	mux.HandleFunc("GET /api/v1/users/me/balance", s.handleBalanceSelf)
+	mux.HandleFunc("GET /api/v1/users/me/payment-method", s.handlePaymentMethodSelfGET)
+	mux.HandleFunc("POST /api/v1/users/me/payment-method", s.handlePaymentMethodSelfPOST)
 	return mux
 }
 

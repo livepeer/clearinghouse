@@ -20,18 +20,22 @@ User-scoped usage route:
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/users/me/usage?from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
 | `GET` | `/api/v1/users/me/balance` | Bearer signer JWT | Live credit/entitlement balance for the authenticated user only |
+| `GET` | `/api/v1/users/me/payment-method` | Bearer signer JWT | Whether a default Stripe payment method is on file |
+| `POST` | `/api/v1/users/me/payment-method` | Bearer signer JWT | Stripe Checkout URL to attach a payment method |
 
 The server derives `clientId` + `externalUserId` from token claims and queries exactly one usage subject.
 
 ### User self routes
 
-End users can read only their own usage and live balance with a signer JWT,
-without passing an app id in the path:
+End users can read only their own usage, live balance, and payment-method
+status with a signer JWT, without passing an app id in the path:
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/users/me/usage?from=&to=[&groupBy=]` | Bearer signer JWT | Metered usage for the authenticated user only |
 | `GET` | `/api/v1/users/me/balance` | Bearer signer JWT | Live credit/entitlement balance for the authenticated user only |
+| `GET` | `/api/v1/users/me/payment-method` | Bearer signer JWT | Whether a default Stripe payment method is on file |
+| `POST` | `/api/v1/users/me/payment-method` | Bearer signer JWT | Stripe Checkout URL to attach a payment method |
 
 Identity is derived from JWT claims (`app_client_id`, `external_user_id`) via
 the identity-webhook verifier.

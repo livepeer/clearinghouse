@@ -11,11 +11,14 @@ import (
 	"github.com/livepeer/clearinghouse/openmeter-collector/builder-api/internal/openmeter"
 )
 
-// UsageReader is the metering surface needed by user usage and balance routes.
+// UsageReader is the metering surface needed by user usage, balance, and
+// payment-method routes.
 type UsageReader interface {
 	QueryUsage(ctx context.Context, q openmeter.UsageQuery) ([]openmeter.UsageRow, error)
 	LookupCustomerByKey(ctx context.Context, key string) (*openmeter.Customer, error)
 	GetAccess(ctx context.Context, customerID, featureKey string) (*openmeter.Access, error)
+	GetStripeBillingRefs(ctx context.Context, customerID string) (openmeter.StripeBillingRefs, error)
+	CreateStripeCheckoutSession(ctx context.Context, customerID, successURL, cancelURL string) (*openmeter.StripeCheckoutSession, error)
 }
 
 type selfUsageResponse struct {
@@ -34,6 +37,24 @@ type selfBalanceResponse struct {
 	HasAccess        bool   `json:"hasAccess"`
 	BalanceUSDMicros int64  `json:"balanceUsdMicros"`
 	Source           string `json:"source"`
+}
+
+type selfPaymentMethodResponse struct {
+	ClientID                string `json:"clientId"`
+	ExternalUserID          string `json:"externalUserId"`
+	Subject                 string `json:"subject"`
+	HasDefaultPaymentMethod bool   `json:"hasDefaultPaymentMethod"`
+	StripeCustomerID        string `json:"stripeCustomerId"`
+}
+
+type createPaymentMethodRequest struct {
+	SuccessURL string `json:"successUrl"`
+	CancelURL  string `json:"cancelUrl"`
+}
+
+type createPaymentMethodResponse struct {
+	CheckoutURL string `json:"checkoutUrl"`
+	SessionID   string `json:"sessionId"`
 }
 
 // authorizeUsageIdentity verifies a caller's Bearer JWT and returns the
@@ -109,22 +130,8 @@ func (s *Server) handleUsageSelf(w http.ResponseWriter, r *http.Request) {
 // the same snapshot token exchange uses for allowance (credits, then
 // entitlement fallback) for OPENMETER_TRIAL_FEATURE_KEY.
 func (s *Server) handleBalanceSelf(w http.ResponseWriter, r *http.Request) {
-	if s.usageReader == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "usage backend is not configured")
-		return
-	}
-	clientID, externalUserID, ok := s.authorizeUsageIdentity(w, r)
+	clientID, externalUserID, subject, customer, ok := s.lookupSelfCustomer(w, r)
 	if !ok {
-		return
-	}
-	subject := openmeter.CustomerKey(clientID, externalUserID)
-	customer, err := s.usageReader.LookupCustomerByKey(r.Context(), subject)
-	if err != nil {
-		writeAPIError(w, http.StatusBadGateway, "customer lookup failed")
-		return
-	}
-	if customer == nil || strings.TrimSpace(customer.ID) == "" {
-		writeAPIError(w, http.StatusNotFound, "customer not found")
 		return
 	}
 	feature := strings.TrimSpace(s.cfg.OpenMeterTrialFeatureKey)
@@ -147,6 +154,76 @@ func (s *Server) handleBalanceSelf(w http.ResponseWriter, r *http.Request) {
 		HasAccess:        access.HasAccess,
 		BalanceUSDMicros: access.BalanceUSDMicros,
 		Source:           access.Source,
+	})
+}
+
+func (s *Server) lookupSelfCustomer(w http.ResponseWriter, r *http.Request) (clientID, externalUserID, subject string, customer *openmeter.Customer, ok bool) {
+	if s.usageReader == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "usage backend is not configured")
+		return "", "", "", nil, false
+	}
+	clientID, externalUserID, ok = s.authorizeUsageIdentity(w, r)
+	if !ok {
+		return "", "", "", nil, false
+	}
+	subject = openmeter.CustomerKey(clientID, externalUserID)
+	customer, err := s.usageReader.LookupCustomerByKey(r.Context(), subject)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "customer lookup failed")
+		return "", "", "", nil, false
+	}
+	if customer == nil || strings.TrimSpace(customer.ID) == "" {
+		writeAPIError(w, http.StatusNotFound, "customer not found")
+		return "", "", "", nil, false
+	}
+	return clientID, externalUserID, subject, customer, true
+}
+
+// handlePaymentMethodSelfGET serves GET /api/v1/users/me/payment-method.
+func (s *Server) handlePaymentMethodSelfGET(w http.ResponseWriter, r *http.Request) {
+	clientID, externalUserID, subject, customer, ok := s.lookupSelfCustomer(w, r)
+	if !ok {
+		return
+	}
+	refs, err := s.usageReader.GetStripeBillingRefs(r.Context(), customer.ID)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "billing lookup failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, selfPaymentMethodResponse{
+		ClientID:                clientID,
+		ExternalUserID:          externalUserID,
+		Subject:                 subject,
+		HasDefaultPaymentMethod: refs.HasDefaultPaymentMethod,
+		StripeCustomerID:        refs.StripeCustomerID,
+	})
+}
+
+// handlePaymentMethodSelfPOST serves POST /api/v1/users/me/payment-method.
+func (s *Server) handlePaymentMethodSelfPOST(w http.ResponseWriter, r *http.Request) {
+	_, _, _, customer, ok := s.lookupSelfCustomer(w, r)
+	if !ok {
+		return
+	}
+	body, err := readJSONBody[createPaymentMethodRequest](r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	successURL := openmeter.HTTPSRedirectURL(body.SuccessURL)
+	cancelURL := openmeter.HTTPSRedirectURL(body.CancelURL)
+	if successURL == "" || cancelURL == "" {
+		writeAPIError(w, http.StatusBadRequest, "successUrl and cancelUrl must be https URLs")
+		return
+	}
+	session, err := s.usageReader.CreateStripeCheckoutSession(r.Context(), customer.ID, successURL, cancelURL)
+	if err != nil || session == nil || session.CheckoutURL == "" {
+		writeAPIError(w, http.StatusBadGateway, "checkout session failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, createPaymentMethodResponse{
+		CheckoutURL: session.CheckoutURL,
+		SessionID:   session.SessionID,
 	})
 }
 
