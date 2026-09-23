@@ -45,7 +45,7 @@
     "keys.mjs"
   ],
   "dependencies": {
-    "jose": "^5.9.6"
+    "jose": "^6.2.12"
   },
   "publishConfig": {
     "access": "public"
